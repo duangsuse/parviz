@@ -637,7 +637,7 @@ const examples = [
 @color Num=B Str=Y kw=B
 Json  ((Val Lit null true false <) :setRecur)
 Val   (("[" (Recur "," +) "]" :par) ("{" (Str ":" Recur "," +) "}" :par :obj) <)
-Lit   Num|Str
+Lit   (Num Str <)
 Num   /-?(0|[1-9][0-9]*)(\\.\\d+)?([eE][+-]?\\d+)?/ :num
 Str   /"(\\\\(?:[nrtbf"\\\\\\/]|u[0-9a-fA-F]{4})|[^"\\\\])*"/ :str` },
   { name: 'JSON（含错误）', input: `[1, , 2, {"a" 1, "b": 2}, 3 4, [5, 6}, 7,

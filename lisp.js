@@ -206,7 +206,7 @@ function* body(items, env, n, last) {
 /* ---- 驱动 ---- */
 let LOG = null
 const warn = (m, n) => LOG && LOG.push({ warn: m, n })
-const globals = log => { const e = new Env(null); e.m.set('print', Object.assign((...a) => { log.push({ out: a.map(x => show(x)).join(' ') }); return a.at(-1) ?? NO }, { bname: 'print' })); return e }
+const globals = log => { const e = new Env(null); e.m.set('w@', Object.assign((...a) => { log.push({ out: a.map(x => show(x)).join(' ') }); return a.at(-1) ?? NO }, { bname: 'w@' })); return e }
 const isDef = s => isT(s) && s[0] == '='
 // 逐步执行：迭代器产出上述事件；结束时 done.value = {value} | {err, x}，均带 log。
 // prog 是根 ["..", 语句...]；ast 不是根时（独立求值）先执行顶层定义再单独求值 ast
@@ -224,7 +224,7 @@ function* steps(ast, prog = ast, last = false) {
 const drive = (it, max = 300000) => { let r, n = 0; while (!(r = it.next()).done) if (++n > max) return { err: tr`超过 ${max} 步，已中止`, log: [] }; return { ...r.value, steps: n } }
 const run = prog => drive(steps(prog))
 const node = (ast, prog) => drive(steps(ast, prog))
-const fns = new Set([...Object.keys(B), 'print'])
+const fns = new Set([...Object.keys(B), 'w@'])
 P.walkers.lisp = { run, steps, node, show, fname, builtins: new Set([...fns, 'NO']) }
 // Calc：同一个 walker，程序取最后一句的值
 P.walkers.calc = { ...P.walkers.lisp, run: prog => drive(steps(prog, prog, true)), steps: (ast, prog) => steps(ast, prog, true) }
@@ -243,13 +243,13 @@ P.examples.splice(4, 0, {
 def fact(n) (<= n 1)? 1 Or (* n (fact (- n 1)))
 [= inc1 (=> (a) [len a].[+ 1])]
 [= user {name "parviz" langs ["js" "lisp"]}]
-(print "fact 5 =" (fact 5) "big:" [3 14 15 9 26].(big 10) user.[get "name"] (inc1 [1 2 3]))
+(w@ "fact 5 =" (fact 5) "big:" [3 14 15 9 26].(big 10) user.[get "name"] (inc1 [1 2 3]))
 (OK [123].(mapNotNO (=>(x) (> x 10)? x Or NO )).[at 0] )`,
 }, {
   name: 'Lisp（作用域/错误）', rules: null, same: 'Lisp', input: `[= k 10]
 [= add (=> (a b) [= s (+ a b)] (OK s.[+ k]))]
 def twice(f x) (f (f x))
-(print (twice (=> (y) (add y 1)) 5) undefinedName)
+(w@ (twice (=> (y) (add y 1)) 5) undefinedName)
 (OK {sum (add 1 2) xs [1 2 (3 ] ok "fine"})`,
 })
 

@@ -108,7 +108,7 @@ Num    /\\d+(\\.\\d+)?/ :num
 Str    /'(?:''|[^'])*'/ :sq
 Ident  /(?!(?:SELECT|DISTINCT|FROM|WHERE|ORDER|BY|LIMIT|AS|AND|OR|ASC|DESC)\\b)[A-Za-z_][\\w.]*/`
 
-const ID = '(?!(?:let|if|then|else)\\b)[A-Za-z_]\\w*'   // 标识符：排除关键字
+const ID = '(?!(?:let|if|then|else)\\b)[A-Za-z_][\\w@]*'   // 标识符：排除关键字；允许 @（内建 w@）
 const MINI = `# 迷你脚本：let 定义、箭头函数、调用、if 表达式、数组；作用域全由 Lexscope 组合：
 # :arg2nth 参数表 + :fn 闭合 lambda、:let 定义（值是 lambda 时函数名绿色）、:ref 引用、:global 顶层；
 # 算符表 + :infix 产出 Lisp 调用，@walk calc 复用 Lisp 的 walker（程序取最后一句的值）
@@ -164,7 +164,7 @@ LIMIT 10` },
 let add = (a, b) => a + b;
 let twice = (f, x) => f(f(x));
 let xs = map(range(1, 6), x => x * x);
-print("fact(5) =", fact(5), "squares:", xs);
+w@("fact(5) =", fact(5), "squares:", xs);
 twice(y => add(y, 10), 1) + sum(xs)` },
 ],
 }
