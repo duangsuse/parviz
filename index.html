@@ -2,26 +2,28 @@
 <html lang="zh">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>parviz — 递归下降可视化</title>
 <style>
 :root{--B:#61afef;--Y:#e5c07b;--G:#98c379;--R:#e06c75;--P:#c678dd;--bg:#1e2127;--bg2:#252932;--fg:#d7dae0;--mut:#7f8794;--bd:#3a3f4b}
 *{box-sizing:border-box}
-header{display:flex;gap:14px;align-items:center;padding:4px 10px;border-bottom:1px solid var(--bd);color:var(--mut);font-size:12px;flex-wrap:wrap}
 body{margin:0;height:100vh;display:flex;flex-direction:column;background:var(--bg);color:var(--fg);font:13px/1.55 ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;font-variant-ligatures:none}
+header{display:flex;gap:12px;align-items:center;padding:4px 10px;border-bottom:1px solid var(--bd);color:var(--mut);font-size:12px;flex-wrap:wrap}
 header b{color:var(--fg)}
-.lg span{padding:0 4px}
+.lg span{padding:0 4px;cursor:pointer;border-radius:2px}
+.lg span:hover{background:#2f3440}
+#status{margin-left:auto;color:var(--mut)}
 pre{margin:0}
 .ed{outline:none;white-space:pre-wrap;word-break:break-all;overflow:auto;padding:8px 10px;tab-size:4;caret-color:#fff}
 #src{height:32vh;border-bottom:1px solid var(--bd);font-size:14px}
 body.stepping #src{caret-color:transparent;background:#1b1e24}
-#bar{display:flex;gap:6px;align-items:center;padding:4px 10px;border-bottom:1px solid var(--bd);background:var(--bg2);flex-wrap:wrap}
-button,select{background:#2f3440;color:var(--fg);border:1px solid var(--bd);border-radius:3px;font:inherit;padding:1px 8px;cursor:pointer}
-button:hover{border-color:var(--B)}
-#status{color:var(--mut);margin-left:auto}
-#out{max-height:18vh;overflow:auto;padding:4px 10px;border-bottom:1px solid var(--bd);white-space:pre-wrap;font-size:12px}
+button,select{background:#2f3440;color:var(--fg);border:1px solid var(--bd);border-radius:3px;font:inherit;padding:1px 6px;cursor:pointer}
+button:hover,select:hover{border-color:var(--B)}
+button.on{border-color:var(--G);color:var(--G)}
+#out{max-height:20vh;overflow:auto;padding:4px 10px;border-bottom:1px solid var(--bd);white-space:pre-wrap;font-size:12px}
 #out .eitem{display:block;color:var(--R);cursor:pointer}
 #out .eitem:hover{background:#3a2a2e}
-#out .val{color:var(--fg)} #out .log{color:var(--G)} #out .warn{color:var(--Y)} #out .ed-log{color:var(--mut)}
+#out .val b{color:var(--P)} #out .log{color:var(--G)} #out .warn{color:var(--Y)} #out .cm{color:var(--mut)}
 #main{flex:1;display:flex;min-height:0}
 #tree{flex:0 0 80%;overflow:auto;padding:8px 12px;border-right:1px solid var(--bd)}
 #side{flex:0 0 20%;display:flex;flex-direction:column;min-width:0}
@@ -30,80 +32,102 @@ button:hover{border-color:var(--B)}
 #rules{flex:1;font-size:12px;white-space:pre;word-break:normal}
 #rerr{max-height:20%;overflow:auto;color:var(--R);font-size:11px;padding:2px 6px}
 #rerr div{cursor:pointer}
-/* 颜色表：BYGRP，CSS.highlights 与树视图共用 */
+/* 颜色表：BYGRP，CSS.highlights（见 #hlc，由 ui.js 生成）与树视图共用 */
 .B{color:var(--B)}.Y{color:var(--Y)}.G{color:var(--G)}.P{color:var(--P)}
 .R{color:var(--R)}.err{text-decoration:underline wavy var(--R);text-decoration-skip-ink:none}
-::highlight(B){color:#61afef}::highlight(Y){color:#e5c07b}::highlight(G){color:#98c379}::highlight(P){color:#c678dd}
-::highlight(R){text-decoration:underline wavy #e06c75;text-decoration-skip-ink:none}
 ::highlight(hov){background-color:rgba(97,175,239,.28)}
-::highlight(step){background-color:rgba(97,175,239,.22)}
-::highlight(stepY){background-color:rgba(229,192,123,.38)}
 ::highlight(eat){background-color:rgba(152,195,121,.42)}
 ::highlight(ev){background-color:rgba(198,120,221,.32)}
-/* 语法树 [123 s[exp] "r"] */
+/* 语法树：[Tag ..] 照常，[-Tag] 已折叠，[.. ] 匿名列表 */
 .tree{white-space:normal}
 .nd{border-radius:2px;cursor:pointer}
 .nd:hover,.nd.hot{background:rgba(97,175,239,.18)}
 .nd.pin{outline:1px solid var(--B)}
 .box>.br{color:var(--mut)}
-.box>.br.nm{color:#abb2bf}
-.box.fold>.kids{display:none}
-.box.fold>.br.nm::after{content:"…";color:var(--B)}
+.box>.tag{color:#abb2bf;margin-right:.6ch}
+.box>.tag.anon{color:var(--mut)}
+.box.fold>.tag::before{content:"-";color:var(--B)}
+.box.fold>.tag{margin-right:0}
+.box.fold>.kids,.box.blk.fold>.kids{display:none}
 .box.blk>.kids{display:block;padding-left:1.3em;border-left:1px dotted var(--bd);margin-left:.3em}
 .box.blk>.kids>*{display:block}
 .box:not(.blk)>.kids>*+*{margin-left:.6ch}
-.par{color:var(--mut);font-size:11px}
+.par{color:var(--mut);font-size:11px;cursor:pointer}
+.par.fold>.tag::before{content:"-";color:var(--B)}
 .par.fold>.pv{display:none}
-.par.fold::after{content:"…]"}
-.par:not(.fold)::after{content:"]"}
-.par [data-pos]{color:var(--Y);cursor:pointer}
+.par [data-pos]{color:var(--Y)}
 .more{color:var(--mut)}
+.gh{color:var(--mut);margin-bottom:6px}
+#split{height:5px;cursor:row-resize;background:var(--bd);flex:none}
+#split:hover,#split.drag{background:var(--B)}
+#brk{width:9em;background:#2f3440;color:var(--fg);border:1px solid var(--bd);border-radius:3px;font:inherit;padding:0 4px}
+#comp{position:fixed;z-index:23;background:#2a2f3a;border:1px solid var(--P);border-radius:4px;box-shadow:0 6px 18px #0008;font-size:12px;padding:2px 0;min-width:120px}
+#comp div{padding:0 8px;cursor:pointer;color:var(--P)}
+#comp div.cur,#comp div:hover{background:#3a4253;color:#fff}
+#comp .hd{color:var(--mut);cursor:default;border-bottom:1px solid var(--bd)}
 /* 全屏 sloc 层 */
 #ov{position:fixed;inset:0;pointer-events:none;z-index:20}
 #ov svg{position:absolute;inset:0;width:100%;height:100%}
-#ov path{fill:none;stroke:var(--B);stroke-width:1.4;stroke-dasharray:4 3}
+#ov g path{fill:none;stroke:var(--B);stroke-width:1.4;stroke-dasharray:4 3}
+#ov g path.ar{stroke:var(--G);stroke-width:1.8;stroke-dasharray:none}
+#ov marker path{fill:var(--G)}
 #ov path.e{stroke:var(--R)}
 .mk{position:fixed;pointer-events:auto;font-size:9px;line-height:1;padding:0 2px;border-radius:2px;background:#2b3a55;color:var(--B);cursor:pointer;transform:translateY(-100%);white-space:nowrap}
 .mk.e{background:#4a2a2e;color:var(--R)}
 #caret{position:fixed;width:2px;background:#fff;z-index:21;pointer-events:none;animation:bl 1s steps(2) infinite}
 @keyframes bl{50%{opacity:.2}}
-#menu{position:fixed;z-index:22;min-width:220px;max-width:60vw;max-height:40vh;overflow:auto;background:#2a2f3a;border:1px solid var(--bd);border-radius:4px;box-shadow:0 6px 18px #0008;font-size:12px;padding:3px 0}
+#menu{position:fixed;z-index:22;min-width:240px;max-width:60vw;max-height:42vh;overflow:auto;background:#2a2f3a;border:1px solid var(--bd);border-radius:4px;box-shadow:0 6px 18px #0008;font-size:12px;padding:3px 0}
+#menu.ch{border-color:var(--B)}
 #menu .hd{padding:2px 8px;color:var(--mut);border-bottom:1px solid var(--bd)}
 #menu .hd b{color:var(--fg)}
-#menu .fr{padding:0 8px;display:flex;gap:12px;justify-content:space-between}
+#menu .alts{padding:2px 8px;color:var(--B);border-bottom:1px solid var(--bd)}
+#menu .alts span{padding:0 2px}
+#menu .alts .cur{background:color-mix(in srgb,var(--B) 35%,transparent);color:#fff}
+#menu .fr{padding:0 8px;display:flex;gap:12px;justify-content:space-between;cursor:default}
+#menu .fr:hover{background:#3a4253}
 #menu .fr.top{background:#344158}
-#menu .fr.tok{color:var(--Y)}
 #menu .fr .sl{color:var(--mut)}
-#menu .tree{padding:3px 8px}
-#menu.y{border-color:var(--Y)}
+/* 触屏：模拟按键 */
+#mob{display:none;position:fixed;right:8px;bottom:8px;z-index:30;gap:4px}
+#mob button{font-size:15px;padding:6px 10px}
+@media (pointer:coarse){#mob{display:flex}}
 </style>
+<style id="hlc"></style>
 </head>
 <body>
 <header>
-  <b>parviz</b><span>递归下降可视化 · 组合子 + 元语言</span>
-  <span class="lg"><span class="B">B 数字</span><span class="Y">Y 字符串</span><span class="G">G 函数名</span><span class="R err">R 错误</span><span class="P">P 参数</span></span>
-  <span>Ctrl+Enter 解析 · Alt+→ 从光标处步进（→ 前进 ← 回溯 Shift 跳过子规则 Esc 退出）· Ctrl+点击 跳到定义 · 点击树节点钉 [n] 标记 · F8 逐步执行</span>
+  <b>parviz</b>
+  <span class="lg" title="点击修改颜色（保存在本机）"><span data-c="B">B 数字</span><span data-c="Y">Y 字符串</span><span data-c="G">G 函数名</span><span data-c="R" class="err">R 错误</span><span data-c="P">P 参数</span></span>
+  <label title="点击树节点时的工具：1-6 切换，或在上面滚轮切换；双击节点总是 [n] 标记；括号/Tag 只在折叠工具下折叠">工具 <select id="tool">
+    <option value="mark">[n] 标记</option>
+    <option value="line">[n] 标记带指示线</option>
+    <option value="fold">折叠展开</option>
+    <option value="deep">深度折叠展开</option>
+    <option value="eval" selected>独立求值</option>
+    <option value="clear">清空 [n] 标记</option>
+  </select></label>
+  <label title="步进时折叠 Tsv→Table→Row→Field 这类未吃任何东西的连续进入与连续返回；Shift+→ 仍可逐个查看"><input type="checkbox" id="coll" checked> 折叠纯递归</label>
+  <label title="F8 在名字匹配的函数返回处中断；? 表示判断；其余按正则整体匹配函数名。$n 标记处总会中断">F8 中断 <input id="brk" value="?|.*" spellcheck="false"></label>
+  <span title="F12 控制台可用：$1 输入流 feed$A，$2 最后悬停的节点，$3 编译后的语法，$4 最近结果，$5.. 标记（ss.marks 可赋值）">失焦解析 · Ctrl+Enter 执行 · → 步进（← 回溯 Shift+→ 含递归返回 Esc 退出）· F8 逐步执行 · Tab 补齐 · Ctrl+点击 定义 · F12: $1–$4 $5..</span>
+  <span id="status"></span>
+  <input type="color" id="picker" style="position:absolute;left:60px;top:22px;opacity:0;width:1px;height:1px;border:0;padding:0">
 </header>
 <pre id="src" class="ed"></pre>
-<div id="bar">
-  <button id="bParse" title="Ctrl+Enter">解析</button>
-  <button id="bStep" title="Alt+→">步进</button>
-  <button id="bRun">执行</button>
-  <button id="bEval" title="F8">逐步执行</button>
-  <span id="status"></span>
-</div>
 <div id="out"></div>
+<div id="split" title="拖动调整上下面板"></div>
 <div id="main">
   <div id="tree" class="tree"></div>
   <aside id="side">
-    <div class="hd"><select id="ex"></select><button id="bCompile" title="Ctrl+Enter">编译</button></div>
+    <div class="hd"><select id="ex"></select><button id="bView" title="切换：输入的语法树 / 语法编译结果">编译结果</button></div>
     <pre id="rules" class="ed"></pre>
     <div id="rerr"></div>
   </aside>
 </div>
-<div id="ov"><svg></svg><div id="mks"></div></div>
+<div id="ov"><svg><defs><marker id="ah" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z"/></marker></defs><g></g></svg><div id="mks"></div></div>
 <div id="caret" hidden></div>
 <div id="menu" hidden></div>
+<div id="comp" hidden></div>
+<div id="mob"><button data-k="ArrowLeft">←</button><button data-k="ArrowRight">→</button><button data-k="ArrowRight" data-shift="1">⇧→</button><button data-k="Enter" data-ctrl="1">Ctrl⏎</button><button data-k="F8">F8</button><button data-k="Escape">Esc</button></div>
 <script src="parse.js"></script>
 <script src="lisp.js"></script>
 <script src="ui.js"></script>

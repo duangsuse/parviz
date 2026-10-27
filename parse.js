@@ -6,9 +6,10 @@ const FAIL = Symbol('FAIL'), EOF = Symbol('EOF')
 
 /* ---------- CST 节点 ----------
    k: tok|kw|lit|seq|alt|join|many|opt|par|rule|err|top
-   a,b: 源码区间；v: 后处理后的值；r: 规则名；c: 颜色 B/Y/G/R/P；err: 报错信息
+   a,b: 源码区间；v: 后处理后的值；r: 规则名；alt: 规则体有序选择所选分支；c: 颜色 B/Y/G/R/P；err: 报错信息
    作用域接口：free=[{name,node}] 未绑定引用，defs=[{name,node,kind}] 定义，自底向上汇总；
-   node.def 指向绑定到的定义节点（Ctrl+点击跳转用）。 */
+   node.def 指向绑定到的定义节点（Ctrl+点击跳转用）。
+   多态显示：:func 可设 node.view = {tag, kids:[Node|view]}，树视图按它显示为 [tag ..]（如 Lisp 的 [= big [=> ..]]）。 */
 class Node {
   constructor(k, a, b, kids = []) {
     this.k = k; this.a = a; this.b = b; this.kids = kids
@@ -22,18 +23,20 @@ const walk = (n, f, up = null) => { if (f(n, up) === false) return; for (const c
 
 /* ---------- 输入流 ----------
    ss(n): n>0 偷看 n 个字符，n<0 吃掉 -n 个字符（与参考代码风格一致）。 */
-const feed = (src, file = 'In1', i = 0) => {
+const feed = (src, file = 'feed$A', i = 0) => {
   const ss = n => { const q = n < 0, r = ss.src.slice(ss.i, ss.i + (q ? -n : n)); if (q) ss.i -= n; return r }
   Object.assign(ss, {
     src, file, i, skip: undefined, st: null, far: -1, exp: new Set, stack: [], recur: [], closers: [],
-    sync: null, spec: 0, mute: 0, trace: null, vmap: new WeakMap, pairs: [], builtins: new Set,
+    sync: null, spec: 0, mute: 0, trace: null, vmap: new WeakMap, pairs: [], builtins: new Set, alts: [], lastAlt: -1,
+    marks: [],  // 标记：Node | 偏移 | [a,b]；UI 将第 k 个显示为 $(5+k)
+    comp: new Map,  // 补齐：位置 → Set(候选词)，由关键字集合登记
     onedit(o, n) {},
   })
   ss.also = f => (f(ss), ss)
   ss.lc = p => { let l = 1, c = 0; for (let j = 0; j < p && j < ss.src.length; j++) ss.src[j] == '\n' ? (l++, c = 0) : c++; return [l, c] }
   ss.nodeOf = x => x instanceof Node ? x : x && typeof x == 'object' ? ss.vmap.get(x) : undefined
   ss.pos = x => typeof x == 'number' ? x : ss.nodeOf(x)?.a
-  ss.sloc = x => { const p = ss.pos(x); if (p == null) return null; const [l, c] = ss.lc(p); return `./feed.${ss.file}:${l}:${c}` }
+  ss.sloc = x => { const p = ss.pos(x); if (p == null) return null; const [l, c] = ss.lc(p); return `./${ss.file}:${l}:${c}` }
   return ss
 }
 const sticky = rx => rx && new RegExp(rx.source, rx.flags.replace(/[gy]/g, '') + 'y')
@@ -43,7 +46,7 @@ const wpos = ss => { const i = ss.i; ws(ss); const r = ss.i; ss.i = i; return r 
 /* ---------- 跟踪（步进可视化用） ---------- */
 const tr = (ss, t, label, a, b, n, ok) => {
   if (!ss.trace || ss.mute || ss.trace.length > 80000) return
-  ss.trace.push({ t, label, a, b, n, ok, ch: ss.spec > 0, st: ss.stack.slice() })
+  ss.trace.push({ t, label, a, b, n, ok, ch: ss.spec > 0, st: ss.stack.slice(), al: ss.alts.at(-1) })
 }
 const ruleTop = ss => { for (let j = ss.stack.length - 1; j >= 0; j--) if (!ss.stack[j].tok) return ss.stack[j].label }
 const fail = (ss, a, label, k) => {
@@ -66,7 +69,7 @@ const tok = (k, label, rx, match, val) => {
     if (!ss.mute) { ss.stack.pop(); tr(ss, 'out', label, a, ss.i, n, true) }
     return n
   }
-  p.label = label; p.k = k; return p
+  p.label = label; p.k = k; p.kind = k; p.src = rx; return p
 }
 const re = (rx, f) => {
   const y = sticky(rx)
@@ -77,6 +80,8 @@ const lit = (s, k = 'lit', v = s) => tok(k, k == 'kw' ? s : JSON.stringify(s), s
   (src, a) => src.startsWith(s, a) && !(W.test(s.at(-1)) && W.test(src[a + s.length] || '')) ? s : null, () => v)
 const KW = { null: null, true: true, false: false }
 const kw = w => lit(w, 'kw', w in KW ? KW[w] : w)
+// 解析器元数据：kind/parts 供“编译结果”视图展示组合子结构
+const meta = (p, kind, parts, x) => Object.assign(p, { kind, parts }, x)
 
 /* ---------- 结构组合子 ---------- */
 const mk = (k, ss, a0, kids, v) => {
@@ -91,26 +96,40 @@ const seq = (...ps) => {
     for (const q of ps) { const n = q(ss); if (!n) { ss.i = a0; return null } kids.push(n) }
     const v = vals(kids); return mk('seq', ss, a0, kids, v.length == 1 ? v[0] : v.length ? v : undefined)
   }
-  p.label = '(' + ps.map(q => q.label).join(' ') + ')'; return p
+  p.label = '(' + ps.map(q => q.label).join(' ') + ')'; return meta(p, 'seq', ps)
 }
 const alt = (...ps) => {
   if (ps.length == 1) return ps[0]
   const p = ss => {
-    const a0 = ss.i, sy = ss.sync, L = ps.length
+    const a0 = ss.i, sy = ss.sync, L = ps.length, xs = ps.map(q => q.label)
     for (let j = 0; j < L; j++) {
       if (j) tr(ss, 'alt', ps[j].label, wpos(ss), 0, null, true)
       ss.sync = sy; if (j < L - 1) ss.spec++
+      ss.alts.push({ xs, j })
       const n = ps[j](ss); if (j < L - 1) ss.spec--
-      if (n) return n
+      ss.alts.pop()
+      if (n) { ss.lastAlt = j; return n }
       ss.i = a0
     }
     return null
   }
-  p.label = ps.map(q => q.label).join('|'); return p
+  p.label = ps.map(q => q.label).join('|'); return meta(p, 'alt', ps, { alts: true })
 }
 const opt = p => {
   const q = ss => { const a0 = ss.i; ss.spec++; const n = p(ss); ss.spec--; if (n) return n; ss.i = a0; return mk('opt', ss, a0, [], undefined) }
-  q.label = p.label + '?'; return q
+  q.label = p.label + '?'; return meta(q, 'opt', [p])
+}
+// (pub priv pro override -) 关键字集合：按最长优先匹配其一；含 "-" 时可以什么都不吃。
+// 每次尝试都在 ss.comp 登记该位置的补齐候选，供 UI 的代码补齐使用
+const kwset = (words, empty) => {
+  const ps = words.slice().sort((a, b) => b.length - a.length).map(w => kw(w))
+  const p = ss => {
+    const a0 = ss.i, a = wpos(ss)
+    if (!ss.mute) { let s = ss.comp.get(a); if (!s) ss.comp.set(a, s = new Set); for (const w of words) s.add(w) }
+    for (const q of ps) { const n = q(ss); if (n) return n }
+    ss.i = a0; return empty ? mk('opt', ss, a0, [], undefined) : null
+  }
+  p.label = '(' + words.join(' ') + (empty ? ' -' : '') + ')'; return meta(p, 'kwset', ps, { words, empty })
 }
 const peek = (ss, p) => { const i = ss.i; ss.mute++; const n = p(ss); ss.mute--; ss.i = i; return !!n }
 const atEOF = ss => wpos(ss) >= ss.src.length
@@ -160,7 +179,7 @@ const many = p => {
     }
     return mk('many', ss, a0, kids, vals(kids))
   }
-  q.label = '(' + p.label + ' *)'; return q
+  q.label = '(' + p.label + ' *)'; return meta(q, 'many', [p])
 }
 // (p sep +)：0~N 个以 sep 连接；出错时落到最近的分隔符或外层闭合符
 const join = (p, sep) => {
@@ -184,7 +203,7 @@ const join = (p, sep) => {
     }
     return mk('join', ss, a0, kids, vals(kids))
   }
-  q.label = '(' + p.label + ' ' + sep.label + ' +)'; return q
+  q.label = '(' + p.label + ' ' + sep.label + ' +)'; return meta(q, 'join', [p, sep])
 }
 // (open ... close :par)：配对；内层出错时扫描到本闭合符继续，找不到则报未闭合
 const par = (open, inner, close) => {
@@ -202,9 +221,9 @@ const par = (open, inner, close) => {
     ss.closers.pop()
     if (c) kids.push(c)
     const N = mk('par', ss, o.a, kids, n ? n.v : undefined)
-    N.pair = [o.a, o.b, c ? c.a : -1, c ? c.b : -1]; return N
+    N.pair = [o.a, o.b, c ? c.a : -1, c ? c.b : -1]; N.inner = n; return N
   }
-  p.label = open.label + '…' + close.label; return p
+  p.label = open.label + '…' + close.label; return meta(p, 'par', [open, inner, close])
 }
 // :func 后处理；返回 FAIL 则视为匹配失败
 const fn = (p, f, name) => {
@@ -214,27 +233,28 @@ const fn = (p, f, name) => {
     if (v === FAIL) { ss.i = a0; fail(ss, n.a, name, 'fn'); return null }
     n.v = v; if (v && typeof v == 'object') ss.vmap.set(v, n); return n
   }
-  q.label = p.label; return q
+  q.label = p.label; return meta(q, 'fn', [p], { fname: name, alts: p.alts })
 }
-// 具名规则：形成 CST 层级与调用栈帧
+// 具名规则：形成 CST 层级与调用栈帧；规则体是有序选择时记下选中的分支 N.alt（显示为 Val.A、Val.B…）
 const rule = (name, get) => {
   const p = ss => {
-    const a0 = ss.i
+    const a0 = ss.i, body = get()
     if (!ss.mute) { const a = wpos(ss); ss.stack.push({ label: name, a }); tr(ss, 'in', name, a, a) }
-    const n = get()(ss)
+    const n = body(ss)
     if (!ss.mute) ss.stack.pop()
     if (!n) { ss.i = a0; tr(ss, 'out', name, a0, a0, null, false); return null }
     const N = new Node('rule', n.a, n.b, [n]); N.r = name; N.v = n.v
+    if (body.alts) N.alt = ss.lastAlt
     if (N.v && typeof N.v == 'object') ss.vmap.set(N.v, N)
     tr(ss, 'out', name, N.a, N.b, N, true); return N
   }
-  p.label = name; return p
+  p.label = name; return meta(p, 'rule', [], { body: get })
 }
-// ~ 指定递归起点；Recur 动态引用最近的 ~（支持链式嵌套）
-const mark = p => { const q = ss => { ss.recur.push(q); try { return p(ss) } finally { ss.recur.pop() } }; q.label = p.label; return q }
+// (… :setRecur) 指定递归起点；Recur 动态引用最近的 :setRecur（支持链式嵌套）
+const mark = p => { const q = ss => { ss.recur.push(q); try { return p(ss) } finally { ss.recur.pop() } }; q.label = p.label; return meta(q, 'mark', [p], { alts: p.alts }) }
 const recur = () => {
-  const p = ss => { const q = ss.recur.at(-1); if (!q) throw new Error('Recur 不在 ~ 范围内'); return q(ss) }
-  p.label = 'Recur'; return p
+  const p = ss => { const q = ss.recur.at(-1); if (!q) throw new Error('Recur 不在 :setRecur 范围内'); return q(ss) }
+  p.label = 'Recur'; return meta(p, 'recur', [])
 }
 const to = x => typeof x == 'function' ? x : x instanceof RegExp ? re(x) : typeof x == 'string' ? lit(x)
   : Array.isArray(x) ? (x[0] instanceof RegExp ? re(x[0], x[1]) : fn(to(x[0]), x[1], 'fn')) : null
@@ -246,7 +266,7 @@ const eat = (p, ss) => {
   if (p && p.start) { g = p; p = g.start } else p = to(p)
   if (ss.skip === undefined) ss.skip = g ? g.skip : /\s+/
   ss.skip = sticky(ss.skip); ss.pairs = g ? g.pairs : []; ss.g = g; if (g) ss.builtins = g.builtins
-  Object.assign(ss, { far: -1, exp: new Set, stack: [], recur: [], closers: [], sync: EOF, spec: 0 })
+  Object.assign(ss, { far: -1, exp: new Set, stack: [], recur: [], closers: [], sync: EOF, spec: 0, alts: [] })
   let n = null, crash = null
   try { n = p(ss) } catch (e) { if (!(e instanceof RangeError) && !/Recur/.test(e.message)) throw e; crash = e }
   const kids = n ? [n] : [], L = ss.src.length
@@ -259,8 +279,52 @@ const eat = (p, ss) => {
   return root.v
 }
 
-/* ---------- 作用域：组合层的绑定接口 ---------- */
-// 用 defs 绑定 n.free 中同名的引用；绑定后从 free 移除
+/* ---------- 标签式 AST：[tag, ...kids] ----------
+   一切结构都是“多态调用”：[fact 5] 即 ["()", ["", "fact"], 5]；"=" "=>" ".." "?" 也只是 tag，由 walker 按 tag 分派。
+   数组上隐藏 node（CST 节点）与 ns（每个 kid 对应的 CST 节点，原始值 kid 显示用）。 */
+const isT = k => Array.isArray(k) && typeof k[0] == 'string' && !!k.node
+const T = (tag, kids, n, ns = [], view = true) => {
+  const a = [tag, ...kids]
+  Object.defineProperty(a, 'node', { value: n }); Object.defineProperty(a, 'ns', { value: ns })
+  if (view) n.view = viewOf(a)
+  return a
+}
+// 产生某节点值的各组成部分对应的 CST 节点（与 vals() 一一对应）
+const parts = n => {
+  if (!n) return []
+  switch (n.k) {
+    case 'par': return parts(n.inner)
+    case 'rule': return parts(n.kids[0])
+    case 'seq': case 'many': case 'join': return n.kids.filter(k => k.k != 'lit' && k.k != 'err' && !k.sep)
+    case 'opt': return n.kids.length ? parts(n.kids[0]) : []
+    default: return [n]
+  }
+}
+const leaves = n => { const r = []; if (n) walk(n, x => { if (!x.kids.length && x.k == 'tok') r.push(x) }); return r }
+// 树视图：把标签式 AST 显示成调用 [f a b]；名字调用以名字作 tag，"." 链显示为脱糖后的调用
+// 原始值 kid 的 CST 节点可能套着 Chain/Exp 等规则与空的 (Dot *)：下钻到唯一非空的子节点
+const core = n => { for (;;) { const ks = n.kids.filter(k => k.k != 'lit' && (k.b > k.a || k.err)); if (ks.length != 1 || n.k == 'err') return n; n = ks[0] } }
+const kidOf = (k, nd, a) => isT(k) ? (k.node === a.node || k[0] == '.' ? viewOf(k) : k.node) : nd && core(nd)
+function viewOf(a) {
+  const [tag, ...ks] = a, ns = a.ns, from = (b, i0 = 0) => ks.slice(i0).map((k, i) => kidOf(k, ns[i + i0], b)).filter(Boolean)
+  if (tag == '()' || tag == '[]') {
+    const c = ks[0]
+    return isT(c) && c[0] == '' ? { tag: c[1], h: c.node, kids: from(a, 1), node: a.node, x: a } : { tag: tag == '[]' ? '..' : '()', kids: from(a), node: a.node, x: a }
+  }
+  if (tag == '.') {
+    const [b, c] = ks, bk = kidOf(b, ns[0], a)
+    if (isT(c) && (c[0] == '()' || c[0] == '[]') && isT(c[1]) && c[1][0] == '')
+      return { tag: c[1][1], h: c[1].node, kids: [bk, ...c.slice(2).map((k, i) => kidOf(k, c.ns[i + 1], c)).filter(Boolean)], node: c.node, x: a }
+    return { tag: '.', kids: [bk, kidOf(c, ns[1], a)].filter(Boolean), node: a.node, x: a }
+  }
+  return { tag, kids: from(a), node: a.node, x: a }
+}
+
+/* ---------- Lexscope 工具包：词法作用域在组合层完成 ----------
+   引用产生 free=[{name,node}]，定义产生 defs=[{name,node,kind}]，二者随 CST 自底向上汇总；
+   bind 在某个节点处用 defs 消解 free（node.def 指向定义，参数紫色、函数绿色）。
+   语法里用 :ref :def :param :scope :arg2nth :fn :let :defn :global 组合出任何“定义/lambda”语法：
+   (=> (a b) e)、[= f (=> (a b) e)]、def f(a b) e 得到完全相同的 AST 与作用域。 */
 const bind = (n, defs) => {
   if (!n.free || !defs || !defs.length) return
   const m = new Map(defs.map(d => [d.name, d]))
@@ -271,6 +335,50 @@ const bind = (n, defs) => {
   })
 }
 const nameOf = (v, n, ss) => typeof v == 'string' ? v : ss.src.slice(n.a, n.b)
+const lexscope = {
+  // 名字引用 → ["", name]
+  ref: (v, n, ss) => { const name = nameOf(v, n, ss); n.free = [{ name, node: n }]; return T('', [name], n, [n], false) },
+  // 单个词条定义 / 参数（元语法的规则名、规则参数用）
+  def: (v, n, ss) => { n.defs = [{ name: nameOf(v, n, ss), node: n, kind: 'rule' }]; n.c = 'G'; return v },
+  param: (v, n, ss) => { n.defs = [{ name: nameOf(v, n, ss), node: n, kind: 'param' }]; n.c = 'P'; return v },
+  // 只绑定参数，其他定义继续向外传
+  scope: (v, n) => { const ps = (n.defs || []).filter(d => d.kind == 'param'); bind(n, ps); if (n.defs) n.defs = n.defs.filter(d => d.kind != 'param'); return v },
+  // 参数表：其中的词条依次成为第 0、1、… 个参数 → ["..", 名字...]
+  arg2nth: (v, n) => {
+    const toks = leaves(n)
+    n.defs = [...(n.defs || []), ...toks.map((t, i) => (t.c = 'P', { name: t.text, node: t, kind: 'param', nth: i }))]
+    return T('..', toks.map(t => t.text), n, toks)
+  },
+  // [参数表, [体...]] → ["=>", 参数表, ...体]；在此闭合作用域（参数与体内局部定义）
+  fn: (v, n) => {
+    const [ps, body = []] = v, pn = parts(n)
+    bind(n, n.defs); n.defs = null
+    return T('=>', [ps, ...body], n, [pn[0], ...parts(pn[1])])
+  },
+  // [名字, 值] → ["=", 名字, 值]；名字定义到外层作用域，值是 lambda 时为函数
+  let: (v, n) => {
+    const [name, val] = v, pn = parts(n), tk = leaves(pn[0])[0], isFn = isT(val) && val[0] == '=>'
+    if (tk) { if (isFn) tk.c = 'G'; (n.defs ||= []).push({ name, node: tk, kind: isFn ? 'fn' : 'var' }) }
+    return T('=', [name, val], n, pn)
+  },
+  // [名字, 参数表, 体] → ["=", 名字, ["=>", 参数表, 体]]，与 let + fn 等价
+  defn: (v, n) => {
+    const [name, ps, body] = v, pn = parts(n), tk = leaves(pn[0])[0]
+    bind(n, n.defs); n.defs = null
+    const lam = T('=>', [ps, body], n, [pn[1], pn[2]], false)
+    if (tk) { tk.c = 'G'; n.defs = [{ name, node: tk, kind: 'fn' }] }
+    return T('=', [name, lam], n, [pn[0]])
+  },
+  // 顶层：绑定全部定义；剩余引用查内建（@walk 提供的函数名绿色），否则报未定义
+  global: (v, n, ss) => {
+    bind(n, n.defs)
+    for (const r of n.free || []) {
+      if (ss.builtins.has(r.name)) { if (ss.g?.fnNames?.has(r.name)) r.node.c = 'G'; continue }
+      r.node.err = `未定义 ${r.name}`
+    }
+    return v
+  },
+}
 const funcs = {
   num: v => Number(v), int: v => parseInt(v),
   str: v => { try { return JSON.parse(v) } catch { return v.slice(1, -1) } },
@@ -282,21 +390,16 @@ const funcs = {
     if (!rows.length) return []
     const [h, ...rs] = rows; return rs.map(r => Object.fromEntries(h.map((k, j) => [k, r[j] ?? ''])))
   },
-  ref: (v, n, ss) => { n.free = [{ name: nameOf(v, n, ss), node: n }]; return v },
-  def: (v, n, ss) => { n.defs = [{ name: nameOf(v, n, ss), node: n, kind: 'rule' }]; n.c = 'G'; return v },
-  param: (v, n, ss) => { n.defs = [{ name: nameOf(v, n, ss), node: n, kind: 'param' }]; n.c = 'P'; return v },
-  scope: (v, n) => { const ps = (n.defs || []).filter(d => d.kind == 'param'); bind(n, ps); if (n.defs) n.defs = n.defs.filter(d => d.kind != 'param'); return v },
-  global: (v, n, ss) => {
-    bind(n, n.defs)
-    for (const r of n.free || []) if (!ss.builtins.has(r.name)) r.node.err = `未定义 ${r.name}`
-    return v
-  },
+  // :tag("()")：带参数的函数是工厂；把值包成 [tag, ...值]
+  tag: tag => (v, n) => Array.isArray(v) && !isT(v) ? T(tag, v, n, parts(n)) : T(tag, v === undefined ? [] : [v], n, [n]),
+  ...lexscope,
 }
 
 /* ---------- 元语言编译器 ----------
-   行首（无缩进）开始一条：  Name body...  | Name(P,..) body... | @skip /re/|none | @start Name | @color Name=B ..
-   body 是隐式序列；( items ops ) 分组，ops: < 有序选择  + 连接(末项为分隔符)  * 重复  ? 可选  ~ 递归起点  :f 后处理  :par 配对
-   A|B 内联选择；"lit" 字面量；小写词为关键字；Recur 引用最近的 ~；/re/ 中 ${P} 插入参数。 */
+   行首（无缩进）开始一条，第一条规则就是起始规则：  Name body...  | Name(P,..) body... | @skip /re/|none | @color Name=B .. | @walk name
+   body 是隐式序列；( items ops ) 分组，ops: < 有序选择  + 连接(末项为分隔符)  * 重复  ? 可选  :setRecur 递归起点  :f 后处理  :par 配对
+   A|B 内联选择；"lit" 字面量；小写词为关键字；(kw1 kw2 -) 关键字集合（- 表示可不消耗，登记补齐候选）；
+   Recur 引用最近的 :setRecur；/re/ 中 ${P} 插入参数。 */
 const isUpper = s => /^[A-Z]/.test(s)
 function mtok(s) {
   const T = []; let i = 0, bol = true
@@ -322,11 +425,11 @@ function mtok(s) {
       try { v = JSON.parse(s.slice(a, i)) } catch { push('bad', '字符串非法', a); continue }
       push('lit', v, a); continue
     }
-    if ('()|,='.includes(ch)) { i++; push(ch, ch, a); continue }
-    if ('<~+*?'.includes(ch)) { i++; push('op', ch, a); continue }
+    if ('()|,=-'.includes(ch)) { i++; push(ch, ch, a); continue }
+    if ('<+*?'.includes(ch)) { i++; push('op', ch, a); continue }
     WORD.lastIndex = i; const m = WORD.exec(s)
     if (m) { i = WORD.lastIndex; push(m[1] == ':' ? 'fn' : m[1] == '@' ? 'dir' : 'word', m[2], a, { adj: s[i] == '(' }); continue }
-    i++; push('bad', `非法字符 ${JSON.stringify(ch)}`, a)
+    i++; push('bad', ch == '~' ? '(A ~) 已改为 (A :setRecur)' : `非法字符 ${JSON.stringify(ch)}`, a)
   }
   return T
 }
@@ -340,6 +443,7 @@ function mparse(S) {
     k++
     if (x.t == 're') return { t: 're', v: x.v, x }
     if (x.t == 'lit') return { t: 'lit', v: x.v, x }
+    if (x.t == '-') return { t: 'empty', x }
     if (x.t == 'word') {
       if (x.v == 'Recur') return { t: 'recur', x }
       if (!isUpper(x.v)) return { t: 'kw', v: x.v, x }
@@ -353,7 +457,11 @@ function mparse(S) {
     const its = [], ops = []
     while (k < S.length && S[k].t != stop) {
       const x = S[k]
-      if (x.t == 'op' || x.t == 'fn') { ops.push(x); k++; continue }
+      if (x.t == 'op' || x.t == 'fn') {
+        ops.push(x); k++
+        if (x.t == 'fn' && x.adj) { x.args = []; need('('); while (S[k] && S[k].t != ')') { const y = S[k++]; if (y.t == 'lit') x.args.push(y.v); else if (y.t != ',') throw new MErr(':f(…) 参数须为字面量', y) } need(')') }
+        continue
+      }
       let a = atom()
       if (S[k]?.t == '|') { const xs = [a]; while (S[k]?.t == '|') { k++; xs.push(atom()) } a = { t: 'alt', xs, x } }
       its.push(a)
@@ -375,9 +483,12 @@ function build(m, env, g) {
     case 'alt': return alt(...m.xs.map(x => build(x, env, g)))
     case 'ref': return env[m.name] ? build(env[m.name], {}, g) : g.inst(m.name, m.args.map(x => x.t == 'ref' && env[x.name] ? env[x.name] : x), m.x)
     case 'grp': {
+      if (m.items.length && !m.ops.length && m.items.every(x => x.t == 'kw' || x.t == 'empty') && m.items.some(x => x.t == 'kw'))
+        return kwset(m.items.filter(x => x.t == 'kw').map(x => x.v), m.items.some(x => x.t == 'empty'))
+      if (m.items.some(x => x.t == 'empty')) throw new MErr('"-" 只能用在关键字集合 (kw1 kw2 -) 中', m.items.find(x => x.t == 'empty').x)
       const its = m.items.map(x => build(x, env, g))
       if (!its.length) throw new MErr('空分组', m.ops[0])
-      const st = m.ops.filter(o => o.t == 'op' && o.v != '~').at(-1)?.v
+      const st = m.ops.filter(o => o.t == 'op').at(-1)?.v
       let p
       if (m.ops.some(o => o.t == 'fn' && o.v == 'par')) {
         if (its.length < 2) throw new MErr(':par 需要开、闭两项', m.ops[0])
@@ -391,8 +502,12 @@ function build(m, env, g) {
       else if (st == '?') p = opt(seq(...its))
       else p = seq(...its)
       for (const o of m.ops) {
-        if (o.t == 'op' && o.v == '~') p = mark(p)
-        else if (o.t == 'fn' && o.v != 'par') { const f = g.funcs[o.v]; if (!f) throw new MErr(`未知函数 :${o.v}`, o); p = fn(p, f, ':' + o.v) }
+        if (o.t == 'fn' && o.v == 'setRecur') p = mark(p)
+        else if (o.t == 'fn' && o.v != 'par') {
+          let f = g.funcs[o.v]; if (!f) throw new MErr(`未知函数 :${o.v}`, o)
+          if (o.args) f = f(...o.args)
+          p = fn(p, f, ':' + o.v)
+        }
       }
       return p
     }
@@ -409,9 +524,13 @@ function grammar(text, opt = {}) {
       if (h.t == 'dir') {
         const a = S.slice(1)
         if (h.v == 'skip') g.skip = a[0]?.t == 're' ? new RegExp(a[0].v) : a[0]?.v == 'none' ? null : (() => { throw new MErr('@skip /re/ 或 none', h) })()
-        else if (h.v == 'start') g.startName = a[0]?.v
+        else if (h.v == 'start') throw new MErr('没有 @start：第一条规则就是起始规则', h)
         else if (h.v == 'color') for (let j = 0; j < a.length; j += 3) { if (a[j + 1]?.t != '=' || !a[j + 2]) throw new MErr('@color Name=B', a[j]); g.colors[a[j].v] = a[j + 2].v }
         else if (h.v == 'builtin') a.forEach(x => g.builtins.add(x.v))
+        else if (h.v == 'walk') {
+          const w = P.walkers[a[0]?.v]; if (!w) throw new MErr(`未注册的 walker ${a[0]?.v}`, a[0] || h)
+          g.walk = a[0].v; for (const k of w.builtins || []) g.builtins.add(k); g.fnNames = w.fns
+        }
         else throw new MErr(`未知指令 @${h.v}`, h)
         continue
       }
@@ -450,14 +569,17 @@ Field(D) (Quoted Num(D) Bare(D) <)
 Quoted   /"(?:[^"]|"")*"/ :unq
 Num(D)   /-?\\d+(?:\\.\\d+)?(?=[\${D}\\r\\n]|$)/ :num
 Bare(D)  /[^"\\r\\n\${D}]*/`
+const CSV_HEAD = `@skip none
+@color Num=B Quoted=Y
+`
 const examples = [
   { name: 'JSON', input: `{"name": "parviz", "tags": [1, 2.5e3, -0.5, true, null],
  "nested": {"a": [], "b": {"deep": [[1], [2, [3]]]}},
  "esc": "line\\n\\u4e2d"}`,
-    rules: `# JSON —— (… <) 有序选择(PEG)，(… ~) 递归起点，Recur 引用最近的 ~
-# (… +) 以末项为分隔符连接 0~N 个；(… :par) 配对提示与错误恢复
+    rules: `# JSON —— (… <) 有序选择(PEG)，(… :setRecur) 递归起点，Recur 引用最近的 :setRecur
+# (… +) 以末项为分隔符连接 0~N 个；(… :par) 配对提示与错误恢复；第一条规则是起始规则
 @color Num=B Str=Y kw=B
-Json  ((Val Lit null true false <) ~)
+Json  ((Val Lit null true false <) :setRecur)
 Val   (("[" (Recur "," +) "]" :par) ("{" (Str ":" Recur "," +) "}" :par :obj) <)
 Lit   Num|Str
 Num   /-?(0|[1-9][0-9]*)(\\.\\d+)?([eE][+-]?\\d+)?/ :num
@@ -469,20 +591,23 @@ Ada,36,"Hello, ""world"""
 Bob,-4.5,"多行
 字段"
 ,,empty
-`, rules: `# RFC4180：引号字段、"" 转义、首行表头；分隔符 D 参数化，CSV/TSV 复用同一组规则
-@skip none
-@color Num=B Quoted=Y
-@start Csv
-Csv      Table(",")
-Tsv      Table("\\t")
+`, rules: `# RFC4180：引号字段、"" 转义、首行表头；分隔符 D 参数化，CSV/TSV 用同一组规则常量拼出
+${CSV_HEAD}Csv      Table(",")
 ${CSV_RULES}` },
-  { name: 'TSV', input: 'id\tname\tnote\n1\tAda\t"tab\there"\n2\t"Bob ""B"""\t3.14\n', rules: `# 同一组规则，换个起点与分隔符
-@skip none
-@color Num=B Quoted=Y
-@start Tsv
-Csv      Table(",")
-Tsv      Table("\\t")
+  { name: 'TSV', input: 'id\tname\tnote\n1\tAda\t"tab\there"\n2\t"Bob ""B"""\t3.14\n', rules: `# 同一组规则常量，换个起始规则与分隔符
+${CSV_HEAD}Tsv      Table("\\t")
 ${CSV_RULES}` },
+  { name: 'Kwd 补齐', input: `pub override fun main;
+priv fun helper;
+pro overri fun draw;
+`, rules: `# Kwd：关键字集合 (pub priv pro override -)，"-" 表示可以什么都不吃；
+# 它在所在位置登记补齐候选：在 overri 后打字会弹出 override（Tab 接受，↑↓ 选择）
+# (Kwd Kwd *) 等效于 (/pub|priv|pro|override/ *)
+@color Name=G kw=P
+Prog  (Decl *)
+Decl  (Kwd Kwd *) "fun" Name ";"
+Kwd   (pub priv pro override -)
+Name  /[A-Za-z_]\\w*/` },
 ]
 const META = `# 元语法：用元语言描述元语言自身（规则区高亮就是用它解析的）
 @skip /(?:[ \\t]+|#[^\\n]*)+/
@@ -497,7 +622,7 @@ Rule    Head (Params ?) (Item *) :scope
 Head    /[A-Z]\\w*/ :def
 Params  (/(?<=\\w)\\(/ (Pname "," +) ")" :par)
 Pname   /[A-Z]\\w*/ :param
-Item    ((Group Re Lit "Recur" Kw Call Op <) ~)
+Item    ((Group Re Lit "Recur" Kw Call Op <) :setRecur)
 Group   ("(" (Recur *) ")" :par)
 Call    Name (Args ?)
 Args    (/(?<=\\w)\\(/ (Arg2 "," +) ")" :par)
@@ -506,11 +631,12 @@ Name    /[A-Z]\\w*/ :ref
 Re      /\\/(?:\\\\.|\\[(?:\\\\.|[^\\]\\\\])*\\]|[^\\/\\\\\\n\\[])+\\//
 Lit     /"(?:\\\\.|[^"\\\\\\n])*"/
 Kw      /[a-z]\\w*/
-Op      /[<~+*?|]|:\\w+/`
+Op      /[<+*?|-]|:\\w+/`
 examples.push({ name: 'Meta（自描述）', input: META, rules: META })
 
-const P = { FAIL, EOF, Node, walk, feed, eat, ws, re, lit, kw, seq, alt, opt, many, join, par, fn, rule, mark, recur, to, bind, funcs, grammar, mtok, examples, META, errsOf }
-P.funcs = {}  // 供其他模块（lisp.js）注册额外 :func
+const P = { FAIL, EOF, Node, walk, feed, eat, ws, re, lit, kw, seq, alt, opt, many, join, par, fn, rule, mark, recur, to, bind, funcs, lexscope, T, isT, parts, viewOf, grammar, mtok, examples, META, errsOf }
+P.funcs = {}    // 供其他模块（lisp.js）注册额外 :func
+P.walkers = {}  // @walk name：Ctrl+Enter 时对解析结果执行的遍历器 { run(value), steps(value), node(ast, value) }
 if (typeof module != 'undefined') module.exports = P
 G.P = P
 })(typeof globalThis != 'undefined' ? globalThis : window)
