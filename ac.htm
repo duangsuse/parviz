@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>AC / trie → $ tree</title>
+<style>
+  :root{--bg:#0d1117;--fg:#c9d1d9;--dim:#484f58;--acc:#58a6ff;--ok:#3fb950;--warn:#d29922;--bad:#f85149}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 ui-monospace,Menlo,Consolas,monospace;user-select:none}
+  main{display:grid;grid-template-columns:280px minmax(0,1fr);gap:16px;padding:16px;height:100vh}
+  aside{display:flex;flex-direction:column;gap:8px;min-height:0}
+  section{display:grid;grid-template-rows:auto 1fr 160px;gap:12px;min-height:0}
+  [hidden]{display:none!important}
+  .panel{display:flex;flex-direction:column;gap:8px;min-height:0}
+  #trieControls{flex:1}
+  textarea,input[type=text],button,select{background:#161b22;color:var(--fg);border:1px solid #30363d;border-radius:6px;padding:6px 8px;font:inherit}
+  textarea{resize:none;width:100%;user-select:text}#pats{height:70px}#text{height:90px}
+  #words{flex:1}
+  textarea::selection{background:#1f4d2d;color:#fff}
+  input[type=text]{width:100%}
+  button{cursor:pointer}button:hover{border-color:var(--acc)}
+  .btns{display:flex;gap:6px}.btns button{flex:1}
+  label{display:flex;align-items:center;gap:6px;color:#8b949e;cursor:pointer}
+  small{color:#8b949e}
+  pre{margin:0;background:#161b22;border:1px solid #30363d;border-radius:6px;padding:10px;overflow:auto;min-height:0}
+  #trieOut{padding:12px}
+  #stat,#trieStat{color:#8b949e;font-size:12px;line-height:1.7;white-space:pre-line;word-break:break-all}
+  #stat b{color:var(--fg)}
+  /* 文本轨道 */
+  table{border-collapse:collapse;background:#161b22;border:1px solid #30363d;border-radius:6px}
+  td{width:26px;height:26px;text-align:center;padding:0;border-left:1px solid #21262d;
+     transition:background-color .3s,color .3s,box-shadow .3s,outline-color .3s,transform .3s}
+  td.lab{width:auto;text-align:right;padding:0 10px;color:#8b949e;font-size:12px;border:0;white-space:nowrap}
+  td.ch{font-weight:600}td.done{color:var(--dim)}
+  td.win{background:#1f4d2d;color:#fff}
+  td.drop{background:#4a1d1d;color:var(--bad);text-decoration:line-through;transform:scale(.85)}
+  td.cur{outline:2px solid var(--acc);outline-offset:-2px;transform:scale(1.12)}
+  td.hit{box-shadow:inset 0 -3px var(--ok)}
+  td.n{font-size:11px;color:#8b949e}
+  /* 树 */
+  .l{white-space:pre;transition:background-color .3s,color .3s,box-shadow .3s}
+  .dim{color:var(--dim)}.end{color:var(--warn)}.acc{color:var(--acc)}
+  .l.cur{background:#1f4d2d;color:#fff}.l.keep{color:var(--acc)}
+  .l.from{background:#4a1d1d;color:var(--bad)}
+  .l.ftgt{box-shadow:inset 3px 0 var(--warn)}
+  .fl{color:var(--dim)}.l.cur .fl{color:var(--warn)}
+  .hit{color:var(--ok);font-weight:600}
+  #log{color:#8b949e;font-size:12px}#log b{color:var(--fg);font-weight:600}
+  .ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}
+</style>
+</head>
+<body>
+<main>
+<aside>
+  <small>默认输入 / 可视化</small>
+  <select id="preset"></select>
+
+  <div class="panel" id="acControls">
+    <small>模式串（空白分隔）</small><textarea id="pats" spellcheck="false"></textarea>
+    <small>文本</small><textarea id="text" spellcheck="false"></textarea>
+    <div class="btns"><button id="step">step →</button><button id="auto">auto</button><button id="reset">↺</button></div>
+    <div id="stat"></div>
+  </div>
+
+  <div class="panel" id="trieControls" hidden>
+    <input type="text" id="q" placeholder="prefix lookup…" autocomplete="off">
+    <label><input type="checkbox" id="radix" checked> radix（压缩单链）</label>
+    <label><input type="checkbox" id="cnt" checked> 显示子树词数</label>
+    <textarea id="words" spellcheck="false"></textarea>
+    <div id="trieStat"></div>
+  </div>
+</aside>
+
+<section id="acView">
+  <div id="track" style="overflow:auto"></div>
+  <pre id="tree"></pre>
+  <pre id="log"></pre>
+</section>
+<pre id="trieOut" hidden></pre>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+/* ---------- 示例 / 切换 ---------- */
+const PRESETS = [
+  { mode: 'ac', name: '经典 · ushers', pats: 'he she his hers', text: 'ushers' },
+  { mode: 'ac', name: '中文 · 敏感词', pats: '广告 推广 推广告 告警 警告', text: '这条推广告警其实是警告' },
+  { mode: 'ac', name: '中英混排', pats: 'ac ac自动机 自动机 动机 机 不回头', text: 'ac自动机不回头，机不可失' },
+  { mode: 'ac', name: '英文 · 输出链', pats: 'ant anthem the them hem he', text: 'The ants hum the anthem.' },
+  { mode: 'ac', name: '中文 · 代词', pats: '她 她们 们的 的 说', text: '她说她们的话她们都懂' },
+  { mode: 'ac', name: '周期串 · 回退陷阱', pats: 'ab abab ababc', text: 'abababababc' },
+
+  { mode: 'trie', name: '词表 · tents', words: `tea ten tent tents to
+in inn int integer integral interface internal intern
+A AB ABC` },
+
+  { mode: 'trie', name: 'FHS · Linux 目录树', words: `/ /bin /boot /dev /etc /home /lib /lib64 /media /mnt /opt /proc /root /run /sbin /srv /sys /tmp /usr /var
+/boot/efi
+/dev/disk /dev/pts /dev/shm
+/etc/opt /etc/skel /etc/systemd /etc/systemd/system
+/home/alice /home/bob
+/media/usb
+/mnt/data
+/opt/app
+/run/lock /run/user
+/srv/ftp /srv/www
+/usr/bin /usr/include /usr/lib /usr/libexec /usr/local /usr/local/bin /usr/local/etc /usr/local/lib /usr/local/share /usr/sbin /usr/share /usr/share/doc /usr/share/man /usr/src
+/var/cache /var/lib /var/local /var/lock /var/log /var/mail /var/opt /var/run /var/spool /var/tmp` },
+
+  { mode: 'trie', name: 'Arch · 目录树', words: `/ /boot /dev /etc /home /proc /run /sys /tmp /usr /var
+/boot/EFI /boot/grub /boot/initramfs-linux.img /boot/vmlinuz-linux
+/etc/fstab /etc/hostname /etc/locale.conf /etc/mkinitcpio.conf /etc/pacman.conf /etc/pacman.d /etc/pacman.d/mirrorlist /etc/systemd /etc/systemd/system
+/home/user
+/usr/bin /usr/bin/pacman /usr/bin/makepkg /usr/bin/systemctl
+/usr/lib /usr/lib/modules /usr/local /usr/local/bin /usr/share /usr/share/doc /usr/share/man
+/var/cache /var/cache/pacman /var/cache/pacman/pkg
+/var/lib /var/lib/pacman /var/lib/pacman/local /var/lib/pacman/sync
+/var/log /var/log/pacman.log /var/tmp` },
+
+  { mode: 'trie', name: 'Python · 关键字', words: `False None True
+and as assert async await
+break class continue
+def del elif else except
+finally for from global
+if import in is lambda
+nonlocal not or pass raise return
+try while with yield` },
+];
+
+for (const mode of ['ac', 'trie']) {
+  const group = document.createElement('optgroup');
+  group.label = mode === 'ac' ? 'Aho-Corasick' : 'trie / radix';
+  PRESETS.forEach((p, i) => {
+    if (p.mode === mode) group.appendChild(new Option(p.name, i));
+  });
+  $('#preset').add(group);
+}
+
+function loadPreset(i) {
+  const p = PRESETS[i];
+  stopAuto();
+  $('#acControls').hidden = $('#acView').hidden = p.mode !== 'ac';
+  $('#trieControls').hidden = $('#trieOut').hidden = p.mode !== 'trie';
+  if (p.mode === 'ac') {
+    $('#pats').value = p.pats; $('#text').value = p.text; init();
+  } else {
+    $('#words').value = p.words; $('#q').value = ''; updateTrie();
+  }
+}
+
+/* ---------- AC：构建 ---------- */
+function buildAC(pats) {
+  const root = { ch: '', c: new Map(), fail: null, out: [], depth: 0, path: '' };
+  for (const p of pats) {
+    let n = root;
+    for (const ch of p) {
+      if (!n.c.has(ch)) n.c.set(ch, { ch, c: new Map(), fail: root, out: [], depth: n.depth + 1, path: n.path + ch });
+      n = n.c.get(ch);
+    }
+    n.out.push(p);
+  }
+  root.fail = root;
+  const q = [...root.c.values()];
+  while (q.length) {
+    const u = q.shift();
+    for (const [ch, v] of u.c) {
+      let f = u.fail;
+      while (f !== root && !f.c.has(ch)) f = f.fail;
+      const t = f.c.get(ch);
+      v.fail = t && t !== v ? t : root;
+      v.out = v.out.concat(v.fail.out);
+      q.push(v);
+    }
+  }
+  return root;
+}
+function naiveReads(root, T) {
+  const r = new Array(T.length).fill(0);
+  for (let s = 0; s < T.length; s++) {
+    let n = root, j = s;
+    while (j < T.length) { r[j]++; if (!n.c.has(T[j])) break; n = n.c.get(T[j]); j++; }
+  }
+  return r;
+}
+
+/* ---------- AC：状态机单步 ---------- */
+let root, T, pats, naive, S, timer = null;
+function init() {
+  pats = [...new Set($('#pats').value.toLowerCase().split(/\s+/).filter(Boolean))];
+  T = $('#text').value.toLowerCase();
+  root = buildAC(pats); naive = naiveReads(root, T);
+  S = { i: 0, node: root, prev: null, ev: null, dropped: 0, jumps: 0, acReads: new Array(T.length).fill(0), matches: [], log: [] };
+  draw();
+}
+function step() {
+  if (S.i >= T.length) { init(); return; }
+  const ch = T[S.i], n = S.node, i = S.i;
+  S.prev = n; S.dropped = 0; S.acReads[i]++;
+  const q = s => `"${esc(s)}"`;
+  if (n.c.has(ch)) {
+    S.node = n.c.get(ch); S.i++; S.ev = 'goto';
+    for (const p of S.node.out) S.matches.push({ p, at: S.i - p.length });
+    S.log.push(`[${i}] '${esc(ch)}' <span class="ok">→</span> ${q(S.node.path)}` +
+      (S.node.out.length ? `  <span class="ok">✓ ${S.node.out.map(esc).join(' ')}</span>` : ''));
+  } else if (n === root) {
+    S.i++; S.ev = 'skip';
+    S.log.push(`[${i}] '${esc(ch)}' <span class="dim">/ 无此边，跳过</span>`);
+  } else {
+    S.node = n.fail; S.dropped = n.depth - S.node.depth; S.jumps++; S.ev = 'fail';
+    S.log.push(`[${i}] '${esc(ch)}' <span class="bad">✗</span> 接不上 ${q(n.path)}  <span class="warn">⤴ fail</span> ${q(S.node.path || '/')}` +
+      `  <b>弃 ${S.dropped} 留 ${S.node.depth}，游标仍在 ${i}</b>`);
+  }
+  draw(true);
+}
+
+/* ---------- AC：渲染 ---------- */
+function drawTrack() {
+  const d = S.node.depth, lo = S.i - d, dlo = lo - S.dropped;
+  const hit = new Set(); for (const m of S.matches) for (let k = 0; k < m.p.length; k++) hit.add(m.at + k);
+  const heat = c => c > 1 ? `style="background:rgba(248,81,73,${Math.min(1, (c - 1) / 4)});color:#fff"` : '';
+  let r1 = '<td class="lab">文本</td>', r2 = '<td class="lab">朴素读取次数</td>', r3 = '<td class="lab">AC 读取次数</td>';
+  for (let k = 0; k < T.length; k++) {
+    const cls = ['ch', k < S.i ? 'done' : '', k >= lo && k < S.i ? 'win' : '', S.ev === 'fail' && k >= dlo && k < lo ? 'drop' : '',
+                 k === S.i ? 'cur' : '', hit.has(k) ? 'hit' : ''].join(' ');
+    r1 += `<td class="${cls}">${esc(T[k] === ' ' ? '␣' : T[k])}</td>`;
+    r2 += `<td class="n" ${heat(naive[k])}>${naive[k]}</td>`;
+    r3 += `<td class="n" ${heat(S.acReads[k])}>${S.acReads[k] || ''}</td>`;
+  }
+  $('#track').innerHTML = `<table><tr>${r1}</tr><tr>${r2}</tr><tr>${r3}</tr></table>`;
+}
+function drawTree() {
+  const keep = new Set(); for (let n = S.node; n !== root; n = parentOf(n)) keep.add(n);
+  const lines = [`<div class="l${S.node === root ? ' cur' : ''}">/</div>`];
+  (function rec(n, ind) {
+    const ks = [...n.c.keys()].sort();
+    ks.forEach((k, i) => {
+      const v = n.c.get(k), last = i === ks.length - 1;
+      const cls = ['l', v === S.node ? 'cur' : '', S.ev === 'fail' && v === S.prev ? 'from' : '',
+                   keep.has(v) && v !== S.node ? 'keep' : '', v === S.node.fail && S.node !== root ? 'ftgt' : ''].join(' ');
+      const fl = v.fail !== root || v === S.node ? ` <span class="fl"> ${v.fail.path==''?'': esc('⤴  '+v.fail.path)}</span>` : '';
+      lines.push(`<div class="${cls}"><span class="dim">${ind}${last ? '└── ' : '├── '}</span>${esc(k)}` +
+        (v.out.length ? ` <span class="end">→ ${v.out.map(esc).join(' ')}</span>` : '') + fl + '</div>');
+      rec(v, ind + (last ? '    ' : '│   '));
+    });
+  })(root, '');
+  $('#tree').innerHTML = lines.join('');
+}
+const parents = new Map();
+function parentOf(n) {
+  if (!parents.size) (function w(u) { for (const v of u.c.values()) { parents.set(v, u); w(v); } })(root);
+  return parents.get(n);
+}
+function syncSelection() {
+  const ta = $('#text'), lo = S.i - S.node.depth;
+  ta.focus({ preventScroll: true });
+  ta.setSelectionRange(lo, S.i);
+}
+function draw(sync) {
+  parents.clear(); drawTrack(); drawTree();
+  if (sync) syncSelection();
+  $('#log').innerHTML = S.log.slice(-8).join('\n') || '<span class="dim">点空白处开始</span>';
+  $('#log').scrollTop = 1e9;
+  const nSum = naive.reduce((a, b) => a + b, 0), aSum = S.acReads.reduce((a, b) => a + b, 0);
+  $('#stat').innerHTML =
+`点屏幕空白处 → 单步。每步 = 吃字符|跳 failptr|跳过。
+
+游标 <b>${S.i}</b> / ${T.length}　状态 <b>"${esc(S.node.path)}"</b>（pre=${S.node.depth}）
+命中：${S.matches.map(m => `${esc(m.p)}@${m.at}`).join(' ') || '—'}
+fail 跳转阻止游标后退 <b>${S.jumps}</b> 次
+
+朴素总读取 <span class="bad">${nSum}</span>（回头重读 ${nSum - T.length}）　AC 已读 <span class="ok">${aSum}</span>`;
+}
+
+/* ---------- trie：构建 ---------- */
+function buildTrie(words) {
+  const root = { c: new Map(), end: false };
+  for (const w of words) {
+    let n = root;
+    for (const ch of w) {
+      if (!n.c.has(ch)) n.c.set(ch, { c: new Map(), end: false });
+      n = n.c.get(ch);
+    }
+    n.end = true;
+  }
+  return root;
+}
+
+// 单子节点且非词尾 → 并边
+function compress(node) {
+  const out = { c: new Map(), end: node.end };
+  for (let [k, v] of node.c) {
+    while (v.c.size === 1 && !v.end) { const [[k2, v2]] = v.c; k += k2; v = v2; }
+    out.c.set(k, compress(v));
+  }
+  return out;
+}
+
+const count = n => (n.end ? 1 : 0) + [...n.c.values()].reduce((s, v) => s + count(v), 0);
+const nodes = n => 1 + [...n.c.values()].reduce((s, v) => s + nodes(v), 0);
+
+function renderTrie(n, indent, path, q, showCnt, lines) {
+  const keys = [...n.c.keys()].sort();
+  keys.forEach((k, i) => {
+    const last = i === keys.length - 1, v = n.c.get(k), p = path + k;
+    const hit = q && p.startsWith(q);            // 命中子树；也涵盖查询停在压缩边中间
+    const onPath = q && !hit && q.startsWith(p); // 通往命中的祖先
+    let label = esc(k);
+    if (hit) label = `<span class="hit">${label}</span>`;
+    else if (onPath) label = `<span class="acc">${label}</span>`;
+    else if (q) label = `<span class="dim">${label}</span>`;
+    const tail = (v.end ? ' <span class="end">●</span>' : '')
+               + (showCnt && v.c.size ? ` <span class="dim">(${count(v)})</span>` : '');
+    lines.push(`<span class="dim">${indent}${last ? '└── ' : '├── '}</span>${label}${tail}`);
+    renderTrie(v, indent + (last ? '    ' : '│   '), p, q, showCnt, lines);
+  });
+}
+function updateTrie() {
+  const words = [...new Set($('#words').value.split(/\s+/).filter(Boolean))];
+  let t = buildTrie(words);
+  const rawN = nodes(t);
+  if ($('#radix').checked) t = compress(t);
+  const q = $('#q').value;
+  const lines = [`<span class="acc">.</span> <span class="dim">(${words.length})</span>`];
+  renderTrie(t, '', '', q, $('#cnt').checked, lines);
+  $('#trieOut').innerHTML = lines.join('\n');
+  const hits = q ? words.filter(w => w.startsWith(q)) : [];
+  $('#trieStat').textContent =
+    `${words.length} words · ${rawN} trie nodes → ${nodes(t)} shown`
+    + (q ? ` · "${q}" → ${hits.length}: ${hits.join(' ')}` : '');
+}
+
+/* ---------- 控制 ---------- */
+function stopAuto() { clearInterval(timer); timer = null; $('#auto').textContent = 'auto'; }
+$('#step').onclick = step;
+$('#reset').onclick = init;
+$('#auto').onclick = () => { if (timer) return stopAuto(); $('#auto').textContent = 'pause'; timer = setInterval(step, 550); };
+$('#preset').onchange = e => loadPreset(+e.target.value);
+['#pats', '#text'].forEach(id => $(id).addEventListener('input', () => { stopAuto(); init(); }));
+['#words', '#q', '#radix', '#cnt'].forEach(id => $(id).addEventListener('input', updateTrie));
+
+const isBlank = el => !el.closest('textarea,input,button,select,small,label');
+document.addEventListener('mousedown', e => {
+  if (!$('#acView').hidden && isBlank(e.target)) e.preventDefault(); // 保住 textarea 焦点，选区才可见
+});
+document.addEventListener('click', e => {
+  if (!$('#acView').hidden && isBlank(e.target)) step();
+});
+
+loadPreset(0);
+</script>
+</body>
+</html>
