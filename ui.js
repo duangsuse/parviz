@@ -9,7 +9,21 @@ const A = i => String.fromCharCode(65 + i)
 
 /* ---------- 编辑器：contenteditable 中只保留一个 Text 节点，Range 随编辑自动顺延 ---------- */
 class Editor {
-  constructor(el, key) { this.el = el; this.key = key; el.contentEditable = 'plaintext-only'; el.spellcheck = false; this.t = document.createTextNode(''); el.append(this.t); this.rmap = new Map }
+  constructor(el, key) {
+    this.el = el; this.key = key; el.contentEditable = 'plaintext-only'; el.spellcheck = false; this.t = document.createTextNode(''); el.append(this.t); this.rmap = new Map
+    // 换行/粘贴/拖放：浏览器可能插入 <br>/<div> 或拆分文本节点，迫使 fix() 重建（旧 Range 全部失效 → 高亮闪烁、光标归零）。
+    // 改为直接在唯一的 Text 节点上 replaceData：live Range 按 DOM 规则自动顺延，旧高亮原地保留到重解析
+    el.addEventListener('beforeinput', e => {
+      const t = e.inputType
+      const s = t == 'insertParagraph' || t == 'insertLineBreak' ? '\n' : t == 'insertFromPaste' || t == 'insertFromDrop' ? e.dataTransfer?.getData('text/plain') ?? e.data : null
+      if (s == null || !this.fix()) return
+      e.preventDefault(); this.splice(s.replace(/\r\n?/g, '\n'))
+    })
+  }
+  splice(s) {
+    const [a, b] = this.caret(); this.t.replaceData(a, b - a, s)
+    this.setSel(a + s.length); this.el.dispatchEvent(new InputEvent('input', { inputType: 'insertText', data: s }))
+  }
   get value() { return this.t.data }
   set value(s) { this.el.textContent = ''; this.t = document.createTextNode(s); this.el.append(this.t) }
   fix() {  // 浏览器插入了 <br>/<div> 时重建为单个文本节点并恢复光标；返回 false 表示旧 Range 已失效
@@ -97,6 +111,7 @@ function paint(ed, root, colors, extra = []) {
 const S = {
   meta: grammar(P.META), g: null, ss: null, rss: null, elOf: new Map, last: '', timer: 0, rtimer: 0,
   onedit: null, res: null, stale: false, view: 'cst', tool: 'eval', folds: new Set, unfold: new Set, down: false, pendingParse: false, collapse: true,
+  srcSeen: null, srcSpec: null, zoom: null, midAt: 0,
 }
 const status = t => $('#status').textContent = t
 const deepest = (root, i, ok = () => true) => { let best = null; walk(root, n => { if (n.a <= i && i < Math.max(n.b, n.a + 1)) { if (ok(n)) best = n; return } return false }); return best }
@@ -283,7 +298,19 @@ function hookTree(host) {
     const t = e.target.closest('.nd[data-i]'); if (t) Sloc.hover(t.closest('.tree')._reg[t.dataset.i], t)
   })
   host.addEventListener('mouseout', e => { if (e.target.closest('.nd[data-i]')) Sloc.hover(null) })
-  host.addEventListener('mousedown', e => { if (e.detail > 1) e.preventDefault() })   // 双击不选中文字
+  host.addEventListener('mousedown', e => {
+    if (e.detail > 1 || e.button == 1) e.preventDefault()   // 双击不选中文字；中键不自动滚屏
+    if (e.button == 1) S.midAt = performance.now()          // 记下中键：Chromium 会把 PRIMARY 选区粘进聚焦的输入区
+  })
+  host.addEventListener('mouseup', e => { if (e.button == 1) e.preventDefault() })
+  // 中键：只看这棵子树（铺满树面板）；右键：回到整棵树
+  host.addEventListener('auxclick', e => {
+    if (e.button != 1) return
+    const t = e.target.closest('.nd[data-i]'), nx = t && nodeOf(t)
+    if (!nx) return
+    e.preventDefault(); zoomTo(nx[0])
+  })
+  host.addEventListener('contextmenu', e => { if (S.zoom) { e.preventDefault(); zoomTo(null) } })
   // 单击：只有折叠工具才折叠（括号、Tag 也一样），其他按当前工具；:par 尾巴总是可展开
   host.addEventListener('click', e => {
     if (e.detail > 1) return
@@ -308,12 +335,19 @@ function renderTree() {
   if (S.view == 'g') { if (S.g) host.append(gDOM(S.g, S)) }
   else if (ss?.tree) {
     const o = { reg: [], regX: [], elOf: S.elOf, folds: S.folds, unfold: S.unfold, colors: S.g.colors, max: 6000 }
-    const t = treeDOM(ss.tree, ss, o); t._reg = o.reg; t._regX = o.regX; host.append(t)
+    const t = treeDOM(S.zoom || ss.tree, ss, o); t._reg = o.reg; t._regX = o.regX; host.append(t)
   }
   host.scrollTop = st
 }
 
 const nodeOf = t => { const tr = t.closest('.tree'); return t.dataset.i == null || !tr?._reg ? null : [tr._reg[t.dataset.i], t.dataset.x != null ? tr._regX[t.dataset.x] : null] }
+// 子树缩放：树面板只渲染这个节点；右键（contextmenu）回到根
+function zoomTo(n) {
+  S.zoom = n
+  renderTree(); Marks.changed()
+  if (n) { $('#tree').scrollTop = 0; status(`只看 ${n.r || n.k}（右键回到根）`) }
+  else status('')
+}
 const foldTool = t => {
   if (S.tool != 'fold' && S.tool != 'deep') return false
   const b = t.closest('.box'); if (b) (S.tool == 'deep' ? deepFold : toggleFold)(b); return true
@@ -419,9 +453,9 @@ function parse() {
   wireFeed(ss, prev)
   const t0 = performance.now(); let v
   try { v = eat(S.g, ss) } catch (e) { status('解析异常：' + e.message); console.error(e); return }
-  S.ss = ss; S.stale = false; window.ss = window.$1 = ss; window.$3 = S.g
+  S.ss = ss; S.stale = false; window.ss = window.$1 = ss; window.$3 = S.g; S.zoom = null   // 新树：子树缩放失效
   paint(src, ss.tree, S.g.colors); renderTree(); Marks.changed(); Edits.sync(ss)
-  setResult({ v, label: `解析 ${(performance.now() - t0).toFixed(1)}ms · ${ss.errs.length} 个错误` })
+  setResult({ v, label: ` ${(performance.now() - t0).toFixed(1)}ms · ${ss.errs.length} 个错误` }); syncHash()
   if (sel && document.activeElement !== src.el) { src.el.focus(); src.setSel(...sel) }   // 结构性编辑后恢复光标
   return v
 }
@@ -464,7 +498,7 @@ function tryShift(old, now) {
   root.b = now.length; ss.src = now; ss.errs = errsOf(root); S.stale = true
   if (T) { T.text = newT; const r = src.rmap.get(T); if (r) { r.setStart(src.t, T.a); r.setEnd(src.t, T.b) } }
   Edits.sync(ss)
-  HL.flush(); renderTree(); Marks.changed(); renderOut()
+  HL.flush(); renderTree(); Marks.changed(); renderOut(); syncHash()
   status(`顺延 ${d > 0 ? '+' : ''}${d} @${ss.sloc(a)}`)
   return true
 }
@@ -523,8 +557,8 @@ function astEl(a, b, r) {
 }
 const preview = (s, a, b = a + 24) => clip(s.slice(a, b).replace(/\s*\n\s*/g, '⏎'), 14)   // 原文前缀，不转义
 const Step = {
-  on: false, ev: [], vis: [], main: [], i: 0,
-  start() {
+  on: false, ev: [], vis: [], main: [], i: 0, all: false,
+  start(all) {
     if (!S.g?.start) return false
     EvStep.stop(); src.fix(); if (S.ss?.src !== src.value) parse()   // 吃下时要连到主语法树
     const [c] = src.caret(), ss = feed(src.value); ss.trace = []; eat(S.g, ss)
@@ -534,8 +568,10 @@ const Step = {
     ev.forEach((e, k) => { if (e.t == 'alt') hide[k] = 1; else if (e.t == 'in') st.push(k); else { const s = st.pop(); if (!e.ok && s != null) hide.fill(1, s, k + 1) } })
     const vis = []; for (let k = 0; k < ev.length; k++) if (!hide[k]) vis.push(k)
     if (!vis.length) return false
-    Object.assign(this, { ss, ev, vis, on: true }); this.recalc()
-    const i = vis.findIndex((k, j) => this.main[j] && ev[k].a >= c); this.i = i < 0 ? vis.length - 1 : i
+    Object.assign(this, { ss, ev, vis, on: true, all }); this.recalc()
+    // 起点随按键：Shift（逐个事件）取光标后的第一个事件；否则取第一个折叠后保留的事件
+    const i = all ? vis.findIndex(k => ev[k].a >= c) : vis.findIndex((k, j) => this.main[j] && ev[k].a >= c)
+    this.i = i < 0 ? vis.length - 1 : i
     document.body.classList.add('stepping'); this.show(); return true
   },
   // 折叠纯递归：Tsv→Table→Row→Field 这样未吃任何东西的连续进入只停在最后一个“非叶”规则（叶规则 = 体只是一个词条，如 Bare）；
@@ -552,7 +588,13 @@ const Step = {
       const pv = E(j - 1)
       return !(pv && pv.t == 'out' && pv.b == e.b)
     })
-    if (this.on && !this.main[this.i]) { let i = this.i; while (i < vis.length - 1 && !this.main[i]) i++; this.i = i }
+    if (this.on && !this.all && !this.main[this.i]) { let i = this.i; while (i < vis.length - 1 && !this.main[i]) i++; this.i = i }
+    let k = 0; this.mpre = this.main.map(m => m ? ++k : k); this.mainTot = k   // 折叠序号前缀和
+  },
+  // 步号：原始事件 i/n；发生折叠时再补折叠序号 f/F=百分比
+  ord() {
+    const n = this.vis.length, s = `${this.i + 1}/${n}`, F = this.mainTot
+    return F > 0 && F < n ? `${s} Or ${this.mpre[this.i]}/${F}=${Math.round(this.mpre[this.i] / F * 100)}%` : s
   },
   cur() { return this.ev[this.vis[this.i]] },
   pos(e) { return e.t == 'out' && e.ok ? e.b : e.a },
@@ -562,14 +604,14 @@ const Step = {
     HL.set('step', {}); menu.hidden = caretEl.hidden = true; status(''); Sloc.link = null; Sloc.draw()
     if (place) { src.el.focus(); src.setSel(p) }
   },
-  // →/←：按折叠后的步；Shift+→/←：逐个事件，含被折叠的递归进入与返回
+  // →/←：按折叠后的步；Shift+→/←：逐个事件，含被折叠的递归进入与返回（#coll 关闭时两者相同）
   move(d, all) {
     const L = this.vis.length; let i = this.i + d
     if (!all) while (i > 0 && i < L - 1 && !this.main[i]) i += d
-    this.i = Math.max(0, Math.min(L - 1, i)); this.show()
+    this.all = all; this.i = Math.max(0, Math.min(L - 1, i)); this.show()
   },
   show() {
-    const e = this.cur(), ss = this.ss, pos = this.pos(e), n = this.vis.length
+    const e = this.cur(), ss = this.ss, pos = this.pos(e)
     const top = [...e.st].reverse().find(f => !f.tok), hl = {}
     if (top && pos > top.a) hl[e.ch ? 'stepCh' : 'step'] = [src.range(top.a, pos)]
     if (e.t == 'out' && e.b > e.a) hl.eat = [src.range(e.a, e.b)]
@@ -577,17 +619,26 @@ const Step = {
     const eaten = e.t == 'out' && e.ok && e.b > e.a, el = eaten && astEl(e.a, e.b, e.n?.r)   // 吃下：临时箭头连到对应 AST
     if (el) el.scrollIntoView({ block: 'nearest' })
     Sloc.link = el ? { el, a: e.a, b: e.b } : null
-    // 进入：原文往右 10 个字符，不加省略号，用红色渐变淡出（.pv）
-    const desc = e.t == 'in' ? ['→ ', h('span', 'pv', ss.src.slice(e.a, e.a + 10).replace(/\s*\n\s*/g, '⏎'))] : [`✓ 吃下 ${clip(ss.src.slice(e.a, e.b).replace(/\s*\n\s*/g, '⏎'))}`]
-    status(`步进 ${this.i + 1}/${n}  ${ss.sloc(pos)}${e.ch ? '  选择中' : ''}`)
+    // 进入：原文往右 10 个字符，不加省略号，用红色渐变淡出（.pv）；吃下：显示 top1 规则名（绿色，悬停在规则区指出）
+    const rn = e.n?.k == 'rule' ? e.label : top?.label, rEl = rn ? h('span', 'G', rn) : null
+    if (rEl) rEl.dataset.rule = rn
+    const desc = e.t == 'in' ? ['→ ', h('span', 'pv', ss.src.slice(e.a, e.a + 10).replace(/\s*\n\s*/g, '⏎'))] : e.ok ? ['✓ ', rEl ?? clip(ss.src.slice(e.a, e.b))] : ['✗ ', rEl]
+    status(`步进 ${ss.sloc(pos)}${e.ch ? '  选择中' : ''}`)
     popup(pos, m => {
-      m.append(h('div', 'hd', h('b', null, ...desc), `  ${this.i + 1}/${n}`))
+      m.append(h('div', 'hd', h('b', null, ...desc), `  ${this.ord()}`))
       if (e.ch && e.al) {   // 处于有序选择中（蓝色）时列出这个选择包含的各项
         const al = h('div', 'alts', '(')
         e.al.xs.forEach((x, j) => { const s = h('span', j == e.al.j ? 'cur' : null, clip(x, 14)); s.dataset.rule = x; al.append(s) })
         al.append(' <)'); m.append(al)
       }
-      ;[...e.st].reverse().forEach((f, k) => { const d = h('div', 'fr' + (k == 0 ? ' top' : ''), h('span', null, preview(ss.src, f.a)), h('span', 'sl', ss.sloc(f.a))); if (!f.tok) d.dataset.rule = f.label; m.append(d) })
+      // 栈层顺序是从内到外，故同前缀的层必然相邻：#coll 开启时同前缀只留最顶上一项
+      const seen = new Set()
+      ;[...e.st].reverse().forEach((f, k) => {
+        const pv = preview(ss.src, f.a)
+        if (S.collapse) { if (seen.has(pv)) return; seen.add(pv) }
+        const d = h('div', 'fr' + (k == 0 ? ' top' : ''), h('span', null, pv), h('span', 'sl', ss.sloc(f.a)))
+        if (!f.tok) d.dataset.rule = f.label; m.append(d)
+      })
     }, e.ch)
     Sloc.draw()
   },
@@ -647,7 +698,7 @@ const EvStep = {
       : e.ph == 'in' ? `⇢ 进入` : `⇠ ${sh(e.v, 1)}`
     HL.set('ev', { ev: [src.range(n.a, n.b)] }); src.scrollTo(n.a)
     popup(e.ph == 'in' ? n.a : n.b, m => {
-      m.append(h('div', 'hd', h('b', null, tag + txt), `  第 ${this.n} 步 · F8 继续`))
+      m.append(h('div', 'hd', h('b', null, tag + txt), `  总步骤 #${this.n}`))
       m.append(h('div', 'fr', h('span', null, clip(S.ss.src.slice(n.a, n.b).replace(/\s+/g, ' '), 40)), h('span', 'sl', S.ss.sloc(n))))
     })
     status(`逐步执行 第 ${this.n} 步`)
@@ -712,7 +763,7 @@ function onKey(e) {
   if (e.key == 'Escape') { EvStep.stop(); return }
   if (e.target === src.el) {
     if (e.key == 'Enter' && (e.ctrlKey || e.metaKey)) { execute(); e.preventDefault() }
-    else if (e.key == 'ArrowRight' && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) { if (Step.start()) e.preventDefault() }
+    else if (e.key == 'ArrowRight' && !e.ctrlKey && !e.altKey && !e.metaKey) { if (Step.start(e.shiftKey)) e.preventDefault() }
   } else if (e.target === rules.el && e.key == 'Enter' && (e.ctrlKey || e.metaKey)) { compile(); e.preventDefault() }
 }
 document.addEventListener('keydown', onKey)
@@ -721,6 +772,7 @@ for (const b of document.querySelectorAll('#mob button')) {
   b.onclick = () => onKey({ key: b.dataset.k, shiftKey: !!b.dataset.shift, ctrlKey: !!b.dataset.ctrl, target: src.el, preventDefault() {} })
 }
 src.el.addEventListener('mousedown', () => { if (Step.on) Step.stop() })
+document.addEventListener('paste', e => { if (performance.now() - S.midAt < 500) e.preventDefault() }, true)   // 中键点树引起的粘贴：别写进输入区
 menu.addEventListener('mouseover', e => { const r = e.target.closest('[data-rule]'); if (r) showRule(r.dataset.rule) })
 
 // Ctrl+点击跳到定义；普通悬停联动树节点
@@ -746,24 +798,120 @@ src.el.addEventListener('scroll', () => Sloc.draw())
 addEventListener('resize', () => Sloc.draw())
 hookTree($('#tree'))
 
-/* ---------- 示例 ---------- */
-const sel = $('#ex')
+/* ---------- 示例 + location.hash ----------
+   #..名字                  内置示例
+   #xx.js..名字             先取 xx.js（整个文件就是一句 (P) => { funcs?, examples:[{name, rules, input}] }），
+                            示例并进选择菜单，再选中名字；省掉名字就选它第一个
+   #…:~<url 编码的源码>     同一套规则，换成这段源码；要远程取文本就写 fetch:<URL>，否则原样当字面量
+   分隔符用 :~ 而不是 :~: —— Chrome 会把 :~: 当成 text fragment 指令从 location.hash 里吃掉 */
+const sel = $('#ex'), HASH_SEP = ':~'
 examples.forEach((x, i) => sel.append(new Option(x.name, i)))
-function load(i) {
+const rulesOf = x => x.rules ?? examples.find(y => y.name == x.same)?.rules
+const dec = s => { try { return decodeURIComponent(s) } catch { return s } }
+function readHash() {
+  const raw = location.hash.slice(1), k = raw.indexOf(HASH_SEP)
+  const head = dec(k < 0 ? raw : raw.slice(0, k)).replace(/^ex=/, '').trim(), j = head.lastIndexOf('..')
+  return { mod: j < 0 ? '' : head.slice(0, j), who: j < 0 ? head : head.slice(j + 2), src: k < 0 ? null : dec(raw.slice(k + HASH_SEP.length)) }
+}
+function writeHash(who, spec) {
+  const h = '#' + encodeURIComponent(who) + (spec == null ? '' : HASH_SEP + encodeURIComponent(spec))
+  if (location.hash == h) return
+  try { history.replaceState(null, '', h) } catch {}
+}
+const headOf = x => (x.mod ? x.mod + '..' : '..') + x.name   // 地址栏写法：模块..名字
+// 源码没被改过就沿用载入时的写法（可能是个 URL），改过就写当前文本；等于示例默认值时不写源码段
+function syncHash() {
+  const x = examples[+sel.value]; if (!x) return
+  const t = src.value === S.srcSeen ? S.srcSpec : src.value
+  writeHash(headOf(x), t === x.input ? null : t)
+}
+function load(i, text, spec = text) {
   const x = examples[i]; sel.value = i
+  const s = text ?? x.input
+  Object.assign(S, { srcSeen: s, srcSpec: s === x.input ? null : spec, zoom: null })
+  writeHash(headOf(x), S.srcSpec)
   S.ss = null; S.onedit = null; Edits.seq = null; S.folds.clear(); S.unfold.clear()
-  rules.value = x.rules ?? examples.find(y => y.name == x.same).rules
-  src.value = x.input; compile()
+  rules.value = rulesOf(x)
+  src.value = s; status(''); compile()
+}
+async function fetchText(url) {
+  const r = await fetch(url); if (!r.ok) throw new Error(`HTTP ${r.status}`)
+  return r.text()
+}
+/* 动态示例模块：一个 URL 只取一次；文件里没有 P/require，只有一句 (P) => ({ funcs, examples }) */
+const mods = new Map
+function loadMod(url) {
+  if (mods.has(url)) return mods.get(url)
+  const p = (async () => {
+    status(`加载示例模块 ${url}`)
+    const make = new Function(`"use strict";return (${await fetchText(url)})`)()
+    if (typeof make != 'function') throw new Error('要写成 (P) => ({ funcs?, examples })')
+    const m = make(P)
+    Object.assign(P.funcs, m.funcs || {})
+    const ids = (m.examples || []).map(x => {
+      let name = x.name || url.split(/[?#]/)[0].split('/').pop()
+      while (examples.some(y => y.name == name)) name += '′'   // 名字要能唯一定位，hash 才能指回来
+      return examples.push({ ...x, name, mod: url }) - 1
+    })
+    for (const i of ids) sel.append(new Option(examples[i].name, i))
+    return { ids }
+  })()
+  mods.set(url, p); p.catch(() => mods.delete(url))   // 取失败不缓存，改了文件再点一次就能重试
+  return p
+}
+const srcUrl = s => /^fetch:/i.test(s) ? s.slice(6) : null   // 源码段：只有 fetch:<URL> 才去取，其余一律当字面量
+async function fromHash() {
+  const { mod, who, src: text } = readHash()
+  try {
+    const r = mod ? await loadMod(mod) : null
+    let i
+    if (!who) i = r ? r.ids[0] ?? -1 : +sel.value || 0
+    else if (!r && /^\d+$/.test(who)) i = +who
+    else i = r ? r.ids.find(k => examples[k].name == who) ?? -1 : examples.findIndex(x => x.name == who)
+    if (i < 0 || i >= examples.length) throw new Error(r ? `${mod} 里没有 ${who}` : `没有示例 ${who}`)
+    const u = text == null ? null : srcUrl(text)
+    load(i, u ? await fetchText(u) : text, text)
+  } catch (e) { status(`示例加载失败：${e.message}`) }
 }
 sel.onchange = () => load(+sel.value)
+addEventListener('hashchange', fromHash)
 if (!window.CSS?.highlights) status('此浏览器不支持 CSS Custom Highlight API，高亮不可用')
 
-/* ---------- 报错语言：i18n/<lang>.json 翻译 f`` 的常量段；切换后重新编译与解析 ---------- */
+/* ---------- 界面文案：原文即键（和 f`` 共用 i18n/<lang>.json）；只扫界面骨架，动态文本不碰 ---------- */
+const I18N_ROOT = 'header, #side .hd, #mob, #split, title', I18N_ATTR = ['title', 'placeholder', 'aria-label']
+const i18nTxt = new WeakMap, i18nAttr = new WeakMap   // 节点 → 原文：换回中文时按原文写回
+const uiTr = s => {
+  const k = s.trim(); if (!k) return s
+  P.f.seen.add(k)                                      // 缺键也照收：P.f.seen 就是待补词典
+  const v = P.f.dict[k]; return v == null ? s : s.replace(k, v)
+}
+function i18nApply() {
+  for (const r of document.querySelectorAll(I18N_ROOT)) {
+    const w = document.createTreeWalker(r, NodeFilter.SHOW_TEXT)
+    for (let t; (t = w.nextNode());) {
+      if (t.parentElement?.closest('#status, #ex option')) continue   // 状态栏 / 示例名是数据
+      if (!i18nTxt.has(t)) i18nTxt.set(t, t.nodeValue)
+      t.nodeValue = uiTr(i18nTxt.get(t))
+    }
+    for (const el of [r, ...r.querySelectorAll('*')]) for (const a of I18N_ATTR) {
+      if (el.closest('#status')) continue
+      const v = el.getAttribute(a); if (!v?.trim()) continue
+      let m = i18nAttr.get(el); if (!m) i18nAttr.set(el, m = {})
+      if (!(a in m)) m[a] = v
+      el.setAttribute(a, uiTr(m[a]))
+    }
+  }
+}
+/* ---------- 报错语言：i18n/<lang>.json 翻译 f`` 的常量段与上面的界面文案 ---------- */
 const langSel = $('#lang')
 async function setLang(l) {
   try { P.f.dict = l == 'zh' ? {} : await (await fetch(`i18n/${l}.json`)).json() } catch (e) { status(`加载 i18n/${l}.json 失败：${e.message}`); return }
-  langSel.value = l; localStorage.setItem('parviz.lang', l); compile()
+  langSel.value = l; localStorage.setItem('parviz.lang', l); document.documentElement.lang = l
+  i18nApply(); compile()
 }
 langSel.onchange = () => setLang(langSel.value)
-load(0)
+
+if(location.pathname=='/') location.hash||='#extra.js..URL:~https%3A%2F%2Fgithub.com%2Fsearch%3Fq%3D1%26a%3D2%0A'
+i18nApply()
+fromHash()
 if ((localStorage.getItem('parviz.lang') || 'zh') != 'zh') setLang(localStorage.getItem('parviz.lang'))

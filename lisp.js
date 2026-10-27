@@ -5,28 +5,52 @@
 const P = G.P || require('./parse.js')
 const { T, isT, parts, viewOf } = P, tr = P.f   // tr`…`：报错文本走 parse.js 的国际化（这里 f 常作函数名，故换名）
 
-/* ======================= ⓪ 四则运算 =======================
-   热身：+ - * / 与括号。Exp 的 (Atom (- "+" "-"; "*" "/" -)) 是 parse.js 的 TDOP 算符表（; 分级，越往后越紧，左结合）；
-   -> y e 定义单个名字（Lexscope :let），:global 消解引用。:infix 把 bin 节点转成 Lisp 的调用 [+ a b]，于是直接用 Lisp 的 walker 求值。 */
+/* ======================= ⓪ 四则运算（两种写法） =======================
+   CALC：Exp 的 (Atom (- "+" "-"; "*" "/" -)) 是 parse.js 的 TDOP 算符表（; 分级，越往后越紧，左结合）；
+         -> y e 是单参 lambda（Lexscope :arg2nth + :fn，y 只在 e 里可见），:global 报未定义；
+         f a b 并列即调用（:apply 柯里化：((f a) b)），比算符结合得紧，所以 (-> x (-> n x*n+1)) 10 2 = 21；
+         :infix 把 bin 节点转成 Lisp 的调用 [+ a b]，于是直接用 Lisp 的 walker 求值。
+   CHAIN：朴素写法，不要作用域。PEG 不支持左递归 Sum ← Sum "+" Prod，改写成链 Sum ← Prod ("+" Prod)*，
+         :chainl 在后处理里从左往右折叠，直接算出数值。 */
 const CALC = `# 四则运算：(Atom (- "+" "-"; "*" "/" -)) 是 TDOP 风格的算符表，";" 分级，越往后结合越紧，全部左结合
-# -> y e 定义一个名字（Lexscope :let），对全部语句可见；没定义的名字报“未定义”
+# -> y e 是单参 lambda：:arg2nth 让 y 成为第 0 个参数，:fn 在此闭合作用域；e 里没定义的名字报“未定义”
+# f a b 并列即调用（柯里化 ((f a) b)），比任何算符都紧：(-> x (-> n x*n+1)) 10 2
 @color Num=B
 @walk calc
-Calc   (Stmt ";" +) :global :tag("..")
-Stmt   (Def Exp <)
-Def    "->" Var Exp :let
-Exp    (Atom (- "+" "-"; "*" "/" -)) :infix
-Atom   (Num ("(" Exp ")" :par) Name <)
+Calc   (Exp ";" +) :global :tag("..")
+Exp    (App (- "+" "-"; "*" "/" -)) :infix
+App    Atom (Atom *) :apply
+Atom   (Num ("(" Exp ")" :par) Lam Name <)
+Lam    "->" Param Exp :fn
+Param  /[A-Za-z_]\\w*/ :arg2nth
 Num    /\\d+(\\.\\d+)?/ :num
-Var    /[A-Za-z_]\\w*/
 Name   /[A-Za-z_]\\w*/ :ref`
+const CHAIN = `# 朴素四则运算：左递归 Sum ← Sum "+" Prod 在 PEG 里会无限递归，于是写成链（chainl）：
+# Sum ← Prod (("+"|"-") Prod)*，:chainl 从左往右折叠，解析完直接得到数值；没有作用域，也不需要 walker
+@color Num=B Add=P Mul=P
+Sum    Prod ((Add Prod) *) :chainl
+Prod   Atom ((Mul Atom) *) :chainl
+Atom   (Num ("(" Sum ")" :par) <)
+Add    /[+-]/
+Mul    /[*\\/]/
+Num    /\\d+(\\.\\d+)?/ :num`
 // bin 节点 [左 算符 右] → ["()", ["", 算符], 左, 右]；算符查 walker 的内建，不产生作用域引用
 const infix = n => n.k != 'bin' ? n.v : (([l, o, r]) => T('()', [T('', [o.text], o, [o], false), infix(l), infix(r)], n, [o, l, r]))(n.kids)
+const ARITH = { '+': (a, b) => a + b, '-': (a, b) => a - b, '*': (a, b) => a * b, '/': (a, b) => a / b }
 
 /* ======================= ① 语法 =======================
    这里只剩两个 Lisp 特有的语法糖：a.(f b) 链与 (c)? A Or B。其余（lambda、定义、def 写法）都在规则里用工具包组合。 */
 const funcs = {
   infix: (v, n) => infix(n),
+  // [函数, [实参...]] → ["()", ["()", 函数, 实参1], 实参2]…（单参 lambda 的柯里化调用）；树里显示为 [() [() f a] b]
+  apply: (v, n) => {
+    const [f, xs] = v; if (!xs.length) return f
+    const pn = parts(n), an = parts(pn[1]); let acc = f, fn = pn[0]
+    xs.forEach((x, k) => { acc = T('()', [acc, x], n, [fn, an[k]], false); fn = null })   // 中间层也挂 n：viewOf 才会递归展开成 [() [() f a] b]
+    n.view = viewOf(acc); return acc
+  },
+  // [首项, [[算符, 项]...]] → 左折叠：((首项 o1 项1) o2 项2)…
+  chainl: ([x, rest]) => rest.reduce((a, [o, b]) => ARITH[o](a, b), x),
   // [基, [调用...]] → [".", [".", 基, 调用1], 调用2]…；树里显示为脱糖后的 [f 基 ..]
   chain: (v, n) => {
     const [b, cs] = v; if (!cs.length) return b
@@ -206,10 +230,13 @@ P.walkers.lisp = { run, steps, node, show, fname, builtins: new Set([...fns, 'NO
 P.walkers.calc = { ...P.walkers.lisp, run: prog => drive(steps(prog, prog, true)), steps: (ast, prog) => steps(ast, prog, true) }
 
 P.examples.splice(4, 0, {
-  name: '四则运算（TDOP）', rules: CALC, input: `-> x 5;
--> y x+1;
--> y1 x*2;
-(y + y1) * 2 - x / 5`,
+  name: '四则运算（TDOP）', rules: CALC, input: `(1 + 2) * 3 - 8 / 4;
+(-> f f 3 + f 4) (-> y y*y);
+(-> x (-> n x*n+1)) 10 2`,
+}, {
+  name: '四则运算（作用域/错误）', rules: null, same: '四则运算（TDOP）', input: `-> y x+1 ; -> y1 x*2`,
+}, {
+  name: '四则运算（朴素 Chain）', rules: CHAIN, input: `1 - 2 - 3 + 4 * (5 - 2) / 6`,
 }, {
   name: 'Lisp', rules: RULES, input: `; 语句位置的 [..] 是调用；[e1].[e2] 即 (e1).(e2 ..) 即 [e2 [e1] ..]
 [= big (=> (xs n) xs.(mapNotNO (=> (x) (> x n)? x Or NO)))]
@@ -226,7 +253,7 @@ def twice(f x) (f (f x))
 (OK {sum (add 1 2) xs [1 2 (3 ] ok "fine"})`,
 })
 
-const L = { NO, Ret, LispErr, B, Walk, Env, ev, steps, run, node, show, fname, truthy, RULES, CALC, funcs }
+const L = { NO, Ret, LispErr, B, Walk, Env, ev, steps, run, node, show, fname, truthy, RULES, CALC, CHAIN, funcs }
 if (typeof module != 'undefined') module.exports = L
 G.LISP = L
 })(typeof globalThis != 'undefined' ? globalThis : window)

@@ -381,13 +381,13 @@ const lexscope = {
   arg2nth: (v, n) => {
     const toks = leaves(n)
     n.defs = [...(n.defs || []), ...toks.map((t, i) => (t.c = 'P', { name: t.text, node: t, kind: 'param', nth: i }))]
-    return T('..', toks.map(t => t.text), n, toks)
+    return T('..', toks.map(t => t.text), n, toks, !toks.includes(n))   // 单参时 n 就是那个词条：不挂 view，免得自己套自己
   },
-  // [参数表, [体...]] → ["=>", 参数表, ...体]；在此闭合作用域（参数与体内局部定义）
+  // [参数表, [体...] | 单个体] → ["=>", 参数表, ...体]；在此闭合作用域（参数与体内局部定义）
   fn: (v, n) => {
-    const [ps, body = []] = v, pn = parts(n)
+    const [ps, body = []] = v, pn = parts(n), many = Array.isArray(body) && !isT(body)
     bind(n, n.defs); n.defs = null
-    return T('=>', [ps, ...body], n, [pn[0], ...parts(pn[1])])
+    return T('=>', [ps, ...(many ? body : [body])], n, [pn[0], ...(many ? parts(pn[1]) : [pn[1]])])
   },
   // [名字, 值] → ["=", 名字, 值]；名字定义到外层作用域，值是 lambda 时为函数
   let: (v, n) => {
