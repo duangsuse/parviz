@@ -94,17 +94,29 @@ F8只在有[n]标记的地方中断，或者在下个返回或判断时中断，
 
 Lisp 的 [=>] 不应该是魔法，如果用 def Name"(" (Args :arg2nth) ")" Exp 来写，应该完全一样，它属于parsec提供的Lexscope工具包。 "=", "=>" 这些前缀只是标签， [fact 5] 这些AST在walk步骤被视为等同 ["()" ["" "fact"] 5]， 它只是多态调用， "..", "?" 同理
 
+加个input（在匹配函数名处中断），默认是 "?|.*" ，行为和现在一样
+
 折叠需要对多行[rule]有效。增加【深度折叠展开】工具
 
 上下面板给个resize。 (A ~) 语法给换成 (A :setRecur)
 
 不要有 @start 。第一条就是start，TSV/CSV 两个版本直接用常量拼
 
-加一个 Kwd  (pub priv pro override -) 语法，它本身不消耗什么，但能指示代码补齐。比如在 Kwd override fun Name 里，但 (Kwd Kwd *) fun 这样就等效于 (/pub|pro../ *) 了
+加一个 Kwd  (pub priv pro override -) 语法，它本身不消耗什么，但能指示代码补齐UI。比如在 Kwd overri^ fun Name 里光标位置可用补齐，但 (Kwd Kwd *) fun 这样，就等效于 (/pub|pro../ *)
 
+> 4
 
+点击括号折叠，只有在折叠工具中有效，其他按工具（默认=独立求值）。双击视为标记。 [1-6] 切换工具
 
-onedit留最近一次就够了，"// 仅顺延了 Range 与 CST 区间，.."  提示改成 "// try ss.onedit=alert" 即可。
+删掉trace里左键临时语法树，精简其代码。 【吃下】时临时用箭头连接到对应AST。 判定状态的选区、trace都改成蓝色（颜色B）风格
+
+报错显示： ∅改成"😡😡😡"
+
+onedit留最近一次就够了，"// 仅顺延了 Range 与 CST 区间，.."  提示改成 "// try ss.onedit=alert" 即可。 onedit 需要使用hashline算法（关于自身及左侧至行首字符），解析完先通知一遍，有变更再执行。 占位实现就是写 #out.val 并显示该词条被编辑了几遍
+
+#menu.hd，比如 → "t 做一个5字符红色渐变…… 写好了： text linear-gradient(95deg, white, 1em, white, 1em, red, 50%, transparent)
+
+Meta 你再补充个 v1 的版本，确保现在的v2复用了lexscope，有较高代码质量
 
 修改报错文本，并允许国际化（设计 f`${}` 字符串，利用外部json翻译其常量段落）
 
@@ -128,3 +140,19 @@ E6 ./feed$A:2:14  什么是 "nul" ？这里支持 "[" 或 "{"
 E7 ./feed$A:2:26  需要闭合 "]"
 
 ```
+
+> 5
+
+coll 好像无效了？(在判定 <) 里含判定的层仍然是要折叠的。  nav BYGRP 的演示自身也没有颜色了                                                                                                                                        
+对于 [=] 和函数名的mark应视为在body上打的暂停                                                                                                                                                                                     
+
+Lisp的函数调试应该和表达式断点一样，一次性展示参数列表和返回                                                                                                                                                                     
+                                                                                                                                                                                                                                  
+lisp.js 的头部预先写一个+-*/和括号的文法， 支持单参lexscope，如 -> y x+1 ; -> y1 x*2                                                                                                                                             
+参考的TDOP算法风格：                                                                                                                                                                                                             
+                                                                                                                                                                                                                                  
+ #3                                                                                                                                                                                                                             
+                                                                                                                                                                                                                                  
+仍然添加在 ( -) 语法中，使用 (- "+" "-"; "*" .. -) 风格即可，不支持右结合。
+
+再加一个朴素Chain（左递归）风格四则计算器，不需要scope

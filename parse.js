@@ -54,7 +54,23 @@ const fail = (ss, a, label, k) => {
   if (a > ss.far) { ss.far = a; ss.exp = new Set }
   if (a == ss.far) ss.exp.add(k == 'tok' ? ruleTop(ss) || label : label)
 }
-const expMsg = (ss, a, d) => ss.far >= a && ss.exp.size ? `${d}；期望 ${[...ss.exp].join(' 或 ')}` : d
+/* ---------- 报错文本与国际化 ----------
+   f`…${x}…`：常量段拼成键 "…{0}…{1}"，查外部 JSON 词典（i18n/<lang>.json → P.f.dict）翻译后再填入插值，缺键用原文。
+   P.f.seen 收集用到过的键，便于补全词典。 */
+const f = (strs, ...xs) => {
+  let key = strs[0]; for (let i = 1; i < strs.length; i++) key += `{${i - 1}}` + strs[i]
+  f.seen.add(key)
+  return (f.dict[key] ?? key).replace(/\{(\d+)\}/g, (_, i) => xs[i])
+}
+f.dict = {}; f.seen = new Set
+const or = xs => xs.join(f` 或 `)
+const quote = s => JSON.stringify(s.length > 24 ? s.slice(0, 24) + '…' : s)
+const exps = (ss, a) => ss.far >= a ? [...ss.exp] : []   // 最远失败处的期望；只举前两项
+const msgMissing = (ss, a) => { const e = exps(ss, a); return e.length ? f`缺少一项，比如 ${or(e.slice(0, 2))}` : f`缺少一项` }
+const msgUnknown = (ss, a, b) => {
+  const got = quote(ss.src.slice(a, b)), e = exps(ss, a)
+  return e.length == 1 ? f`其中有 ${e[0]} ——不是 ${got}` : e.length ? f`什么是 ${got} ？这里支持 ${or(e.slice(0, 2))}` : f`什么是 ${got} ？`
+}
 const errNode = (ss, a, b, msg) => { const n = new Node('err', a, b); n.err = msg; n.v = FAIL; ss.far = -1; ss.exp = new Set; return n }
 
 /* ---------- 词法组合子 ---------- */
@@ -131,6 +147,24 @@ const kwset = (words, empty) => {
   }
   p.label = '(' + words.join(' ') + (empty ? ' -' : '') + ')'; return meta(p, 'kwset', ps, { words, empty })
 }
+// (X (- "+" "-"; "*" "/" -))：TDOP 风格的算符表，修饰前一项 X（操作数）。";" 分级，越往后结合越紧；全部左结合（不支持右结合）。
+// 每次结合产生一个 bin 节点 kids=[左, 算符, 右]，值为 [算符, 左值, 右值]；缺右项时退回到算符之前，留给外层报错
+const prec = (x, levels) => {
+  const ops = levels.flatMap((L, l) => L.map(o => [o, l])).sort((p, q) => q[0].label.length - p[0].label.length)
+  const climb = (ss, min) => {
+    let l = x(ss); if (!l) return null
+    for (;;) {
+      const at = ss.i; let o = null, lv = -1
+      for (const [q, k] of ops) if (k >= min && (o = q(ss))) { lv = k; break }
+      if (!o) { ss.i = at; return l }
+      const r = climb(ss, lv + 1); if (!r) { ss.i = at; return l }
+      l = mk('bin', ss, l.a, [l, o, r], [o.text, l.v, r.v])
+    }
+  }
+  const p = ss => climb(ss, 0)
+  p.label = `(${x.label} (- ${levels.map(L => L.map(o => o.label).join(' ')).join('; ')} -))`
+  return meta(p, 'prec', [x, ...ops.map(o => o[0])], { levels })
+}
 const peek = (ss, p) => { const i = ss.i; ss.mute++; const n = p(ss); ss.mute--; ss.i = i; return !!n }
 const atEOF = ss => wpos(ss) >= ss.src.length
 const atStop = (ss, sy) => atEOF(ss) || (sy != EOF && peek(ss, sy)) || ss.closers.some(c => peek(ss, c))
@@ -156,7 +190,7 @@ const skipTo = (ss, ...stops) => {
 }
 const recover = (ss, sep, sy) => {
   ws(ss); const a = ss.i, r = skipTo(ss, sep, sy)
-  const e = errNode(ss, a, r.i, expMsg(ss, a, a == r.i ? '缺少元素' : '无法识别 ' + JSON.stringify(ss.src.slice(a, r.i))))
+  const e = errNode(ss, a, r.i, a == r.i ? msgMissing(ss, a) : msgUnknown(ss, a, r.i))
   ss.i = r.i; return { e, sep: r.which == 0 }
 }
 const chunkErr = ss => {
@@ -164,7 +198,7 @@ const chunkErr = ss => {
   const o = P.find(p => s.startsWith(p[0], a))
   if (o) { let d = 0; i = a; while (i < s.length) { if (P.some(p => s.startsWith(p[0], i))) d++; else if (P.some(p => s.startsWith(p[1], i)) && --d == 0) { i++; break } i++ } }
   else while (i < s.length && !/\s/.test(s[i]) && !P.some(([x, y]) => s.startsWith(x, i) || s.startsWith(y, i))) i++
-  ss.i = i; return errNode(ss, a, i, expMsg(ss, a, '无法识别 ' + JSON.stringify(s.slice(a, i))))
+  ss.i = i; return errNode(ss, a, i, msgUnknown(ss, a, i))
 }
 // (p *)：0~N 次；若是 :par 内层/顶层，出错时跳过一块继续读
 const many = p => {
@@ -215,8 +249,8 @@ const par = (open, inner, close) => {
     let c = close(ss)
     if (!c) {
       ws(ss); const a = ss.i, r = skipTo(ss, close)
-      if (r.which == 0) { kids.push(errNode(ss, a, r.i, expMsg(ss, a, '无法识别 ' + JSON.stringify(ss.src.slice(a, r.i))))); ss.i = r.i; c = close(ss) }
-      else { kids.push(errNode(ss, a, a, expMsg(ss, a, '缺少 ' + close.label))); o.err = `未闭合的 ${o.text}（期望 ${close.label}）` }
+      if (r.which == 0) { kids.push(errNode(ss, a, r.i, msgUnknown(ss, a, r.i))); ss.i = r.i; c = close(ss) }
+      else { kids.push(errNode(ss, a, a, f`需要闭合 ${close.label}`)); o.err = f`这有个 ${o.text} 需要闭合 ${close.label}` }
     }
     ss.closers.pop()
     if (c) kids.push(c)
@@ -253,7 +287,7 @@ const rule = (name, get) => {
 // (… :setRecur) 指定递归起点；Recur 动态引用最近的 :setRecur（支持链式嵌套）
 const mark = p => { const q = ss => { ss.recur.push(q); try { return p(ss) } finally { ss.recur.pop() } }; q.label = p.label; return meta(q, 'mark', [p], { alts: p.alts }) }
 const recur = () => {
-  const p = ss => { const q = ss.recur.at(-1); if (!q) throw new Error('Recur 不在 :setRecur 范围内'); return q(ss) }
+  const p = ss => { const q = ss.recur.at(-1); if (!q) throw new Error(f`Recur 不在 :setRecur 范围内`); return q(ss) }
   p.label = 'Recur'; return meta(p, 'recur', [])
 }
 const to = x => typeof x == 'function' ? x : x instanceof RegExp ? re(x) : typeof x == 'string' ? lit(x)
@@ -271,9 +305,9 @@ const eat = (p, ss) => {
   try { n = p(ss) } catch (e) { if (!(e instanceof RangeError) && !/Recur/.test(e.message)) throw e; crash = e }
   const kids = n ? [n] : [], L = ss.src.length
   ss.sync = null
-  if (crash) kids.push(errNode(ss, ss.i, L, crash instanceof RangeError ? '递归过深（左递归？）' : crash.message))
-  else if (!n) { const a = Math.max(ss.far, 0); kids.push(errNode(ss, a, L, expMsg(ss, a, '无法解析'))) }
-  else { ws(ss); if (ss.i < L) { const a = ss.i; kids.push(errNode(ss, a, L, expMsg(ss, a, '多余输入'))) } }
+  if (crash) kids.push(errNode(ss, ss.i, L, crash instanceof RangeError ? f`递归过深（左递归？）` : crash.message))
+  else if (!n) { const a = Math.max(ss.far, 0), e = exps(ss, a); kids.push(errNode(ss, a, L, e.length ? f`无法解析，这里支持 ${or(e.slice(0, 2))}` : f`无法解析`)) }
+  else { ws(ss); if (ss.i < L) { const a = ss.i; kids.push(errNode(ss, a, L, f`后面多出了 ${quote(ss.src.slice(a, L))}`)) } }
   const root = new Node('top', 0, L, kids); root.v = n ? n.v : undefined
   ss.tree = root; ss.errs = errsOf(root); ss.value = root.v
   return root.v
@@ -330,7 +364,7 @@ const bind = (n, defs) => {
   const m = new Map(defs.map(d => [d.name, d]))
   n.free = n.free.filter(r => {
     const d = m.get(r.name); if (!d) return true
-    if (r.node !== d.node) { r.node.def = d.node; if (d.kind == 'param') r.node.c = 'P'; else if (d.kind == 'fn') r.node.c = 'G' }
+    if (r.node !== d.node) { r.node.def = d.node; if (d.kind == 'param') r.node.c = 'P'; else if (d.kind == 'fn' || d.kind == 'rule') r.node.c = 'G' }
     return false
   })
 }
@@ -374,7 +408,7 @@ const lexscope = {
     bind(n, n.defs)
     for (const r of n.free || []) {
       if (ss.builtins.has(r.name)) { if (ss.g?.fnNames?.has(r.name)) r.node.c = 'G'; continue }
-      r.node.err = `未定义 ${r.name}`
+      r.node.err = f`未定义 ${r.name}`
     }
     return v
   },
@@ -399,6 +433,7 @@ const funcs = {
    行首（无缩进）开始一条，第一条规则就是起始规则：  Name body...  | Name(P,..) body... | @skip /re/|none | @color Name=B .. | @walk name
    body 是隐式序列；( items ops ) 分组，ops: < 有序选择  + 连接(末项为分隔符)  * 重复  ? 可选  :setRecur 递归起点  :f 后处理  :par 配对
    A|B 内联选择；"lit" 字面量；小写词为关键字；(kw1 kw2 -) 关键字集合（- 表示可不消耗，登记补齐候选）；
+   X (- "+" "-"; "*" "/" -) 算符表：修饰前一项 X，按 ; 分级（越往后越紧），左结合；
    Recur 引用最近的 :setRecur；/re/ 中 ${P} 插入参数。 */
 const isUpper = s => /^[A-Z]/.test(s)
 function mtok(s) {
@@ -416,30 +451,30 @@ function mtok(s) {
         if (s[j] == '\\') { j++; continue }
         if (s[j] == '[') cls = 1; else if (s[j] == ']') cls = 0; else if (s[j] == '/' && !cls) break
       }
-      if (s[j] != '/') { i = j; push('bad', '未闭合的正则', a); continue }
+      if (s[j] != '/') { i = j; push('bad', f`未闭合的正则`, a); continue }
       i = j + 1; push('re', s.slice(a + 1, j), a); continue
     }
     if (ch == '"') {
       let j = i + 1; for (; j < s.length && s[j] != '"' && s[j] != '\n'; j++) if (s[j] == '\\') j++
       i = Math.min(j + 1, s.length); let v
-      try { v = JSON.parse(s.slice(a, i)) } catch { push('bad', '字符串非法', a); continue }
+      try { v = JSON.parse(s.slice(a, i)) } catch { push('bad', f`字符串非法`, a); continue }
       push('lit', v, a); continue
     }
-    if ('()|,=-'.includes(ch)) { i++; push(ch, ch, a); continue }
+    if ('()|,=-;'.includes(ch)) { i++; push(ch, ch, a); continue }
     if ('<+*?'.includes(ch)) { i++; push('op', ch, a); continue }
     WORD.lastIndex = i; const m = WORD.exec(s)
     if (m) { i = WORD.lastIndex; push(m[1] == ':' ? 'fn' : m[1] == '@' ? 'dir' : 'word', m[2], a, { adj: s[i] == '(' }); continue }
-    i++; push('bad', ch == '~' ? '(A ~) 已改为 (A :setRecur)' : `非法字符 ${JSON.stringify(ch)}`, a)
+    i++; push('bad', ch == '~' ? f`(A ~) 已改为 (A :setRecur)` : f`非法字符 ${JSON.stringify(ch)}`, a)
   }
   return T
 }
 class MErr extends Error { constructor(m, t) { super(m); this.t = t } }
 function mparse(S) {
   let k = 0
-  const need = t => { const x = S[k]; if (!x || x.t != t) throw new MErr(`期望 ${t}`, x || S.at(-1)); k++; return x }
+  const need = t => { const x = S[k]; if (!x || x.t != t) throw new MErr(f`这里需要 ${t}`, x || S.at(-1)); k++; return x }
   const atom = () => {
-    const x = S[k]; if (!x) throw new MErr('缺少项', S.at(-1))
-    if (x.t == '(') { k++; const g = items(')'); need(')'); return g }
+    const x = S[k]; if (!x) throw new MErr(f`缺少一项`, S.at(-1))
+    if (x.t == '(') { k++; if (S[k]?.t == '-') return optab(x); const g = items(')'); need(')'); return g }
     k++
     if (x.t == 're') return { t: 're', v: x.v, x }
     if (x.t == 'lit') return { t: 'lit', v: x.v, x }
@@ -451,7 +486,22 @@ function mparse(S) {
       if (x.adj) { need('('); for (;;) { args.push(atom()); if (S[k]?.t == ',') { k++; continue } break } need(')') }
       return { t: 'ref', name: x.v, args, x }
     }
-    throw new MErr(x.t == 'bad' ? x.v : `意外的 ${x.v}`, x)
+    throw new MErr(x.t == 'bad' ? x.v : f`意外的 ${x.v}`, x)
+  }
+  // (- "+" "-"; "*" "/" -)：已吃掉 "("；字面量或关键字按 ";" 分级
+  const optab = x => {
+    k++; const levels = [[]]
+    for (;;) {
+      const y = S[k]; if (!y) throw new MErr(f`算符表缺少结尾 -)`, x)
+      k++
+      if (y.t == '-') { need(')'); break }
+      if (y.t == ';') levels.push([])
+      else if (y.t == 'lit') levels.at(-1).push({ t: 'lit', v: y.v, x: y })
+      else if (y.t == 'word' && !isUpper(y.v)) levels.at(-1).push({ t: 'kw', v: y.v, x: y })
+      else throw new MErr(f`算符表里只能写字面量、关键字与 ;`, y)
+    }
+    if (levels.some(L => !L.length)) throw new MErr(f`算符表有空的一级`, x)
+    return { t: 'optab', levels, x }
   }
   const items = stop => {
     const its = [], ops = []
@@ -459,7 +509,7 @@ function mparse(S) {
       const x = S[k]
       if (x.t == 'op' || x.t == 'fn') {
         ops.push(x); k++
-        if (x.t == 'fn' && x.adj) { x.args = []; need('('); while (S[k] && S[k].t != ')') { const y = S[k++]; if (y.t == 'lit') x.args.push(y.v); else if (y.t != ',') throw new MErr(':f(…) 参数须为字面量', y) } need(')') }
+        if (x.t == 'fn' && x.adj) { x.args = []; need('('); while (S[k] && S[k].t != ')') { const y = S[k++]; if (y.t == 'lit') x.args.push(y.v); else if (y.t != ',') throw new MErr(f`:f(…) 参数须为字面量`, y) } need(')') }
         continue
       }
       let a = atom()
@@ -476,37 +526,43 @@ function build(m, env, g) {
     case 'lit': return lit(m.v)
     case 'kw': return kw(m.v)
     case 're': {
-      const src = m.v.replace(/\$\{(\w+)\}/g, (_, k) => { const e = env[k]; if (!e || e.t != 'lit') throw new MErr(`参数 ${k} 未提供字面量`, m.x); return escRe(e.v) })
+      const src = m.v.replace(/\$\{(\w+)\}/g, (_, k) => { const e = env[k]; if (!e || e.t != 'lit') throw new MErr(f`参数 ${k} 未提供字面量`, m.x); return escRe(e.v) })
       try { return re(new RegExp(src)) } catch (e) { throw new MErr(e.message, m.x) }
     }
     case 'recur': return recur()
     case 'alt': return alt(...m.xs.map(x => build(x, env, g)))
     case 'ref': return env[m.name] ? build(env[m.name], {}, g) : g.inst(m.name, m.args.map(x => x.t == 'ref' && env[x.name] ? env[x.name] : x), m.x)
+    case 'optab': throw new MErr(f`算符表 (- …) 前面需要一个操作数`, m.x)
     case 'grp': {
       if (m.items.length && !m.ops.length && m.items.every(x => x.t == 'kw' || x.t == 'empty') && m.items.some(x => x.t == 'kw'))
         return kwset(m.items.filter(x => x.t == 'kw').map(x => x.v), m.items.some(x => x.t == 'empty'))
-      if (m.items.some(x => x.t == 'empty')) throw new MErr('"-" 只能用在关键字集合 (kw1 kw2 -) 中', m.items.find(x => x.t == 'empty').x)
-      const its = m.items.map(x => build(x, env, g))
-      if (!its.length) throw new MErr('空分组', m.ops[0])
+      if (m.items.some(x => x.t == 'empty')) throw new MErr(f`"-" 只能用在关键字集合 (kw1 kw2 -) 中`, m.items.find(x => x.t == 'empty').x)
+      const its = []   // 算符表修饰紧挨在它前面的一项
+      for (const x of m.items) {
+        if (x.t != 'optab') { its.push(build(x, env, g)); continue }
+        if (!its.length) throw new MErr(f`算符表 (- …) 前面需要一个操作数`, x.x)
+        its.push(prec(its.pop(), x.levels.map(L => L.map(y => build(y, env, g)))))
+      }
+      if (!its.length) throw new MErr(f`空分组`, m.ops[0])
       const st = m.ops.filter(o => o.t == 'op').at(-1)?.v
       let p
       if (m.ops.some(o => o.t == 'fn' && o.v == 'par')) {
-        if (its.length < 2) throw new MErr(':par 需要开、闭两项', m.ops[0])
+        if (its.length < 2) throw new MErr(f`:par 需要开、闭两项`, m.ops[0])
         p = par(its[0], its.length > 2 ? seq(...its.slice(1, -1)) : null, its.at(-1))
         const o = m.items[0], c = m.items.at(-1)
         if (o.t == 'lit' && c.t == 'lit' && !g.pairs.some(q => q[0] == o.v)) g.pairs.push([o.v, c.v])
       }
       else if (st == '<') p = alt(...its)
-      else if (st == '+') { if (its.length < 2) throw new MErr('+ 需要元素与分隔符', m.ops[0]); p = join(seq(...its.slice(0, -1)), its.at(-1)) }
+      else if (st == '+') { if (its.length < 2) throw new MErr(f`+ 需要元素与分隔符`, m.ops[0]); p = join(seq(...its.slice(0, -1)), its.at(-1)) }
       else if (st == '*') p = many(seq(...its))
       else if (st == '?') p = opt(seq(...its))
       else p = seq(...its)
       for (const o of m.ops) {
         if (o.t == 'fn' && o.v == 'setRecur') p = mark(p)
         else if (o.t == 'fn' && o.v != 'par') {
-          let f = g.funcs[o.v]; if (!f) throw new MErr(`未知函数 :${o.v}`, o)
-          if (o.args) f = f(...o.args)
-          p = fn(p, f, ':' + o.v)
+          let fx = g.funcs[o.v]; if (!fx) throw new MErr(f`未知函数 :${o.v}`, o)
+          if (o.args) fx = fx(...o.args)
+          p = fn(p, fx, ':' + o.v)
         }
       }
       return p
@@ -523,24 +579,24 @@ function grammar(text, opt = {}) {
       const h = S[0], M = mparse(S)
       if (h.t == 'dir') {
         const a = S.slice(1)
-        if (h.v == 'skip') g.skip = a[0]?.t == 're' ? new RegExp(a[0].v) : a[0]?.v == 'none' ? null : (() => { throw new MErr('@skip /re/ 或 none', h) })()
-        else if (h.v == 'start') throw new MErr('没有 @start：第一条规则就是起始规则', h)
-        else if (h.v == 'color') for (let j = 0; j < a.length; j += 3) { if (a[j + 1]?.t != '=' || !a[j + 2]) throw new MErr('@color Name=B', a[j]); g.colors[a[j].v] = a[j + 2].v }
+        if (h.v == 'skip') g.skip = a[0]?.t == 're' ? new RegExp(a[0].v) : a[0]?.v == 'none' ? null : (() => { throw new MErr(f`@skip /re/ 或 none`, h) })()
+        else if (h.v == 'start') throw new MErr(f`没有 @start：第一条规则就是起始规则`, h)
+        else if (h.v == 'color') for (let j = 0; j < a.length; j += 3) { if (a[j + 1]?.t != '=' || !a[j + 2]) throw new MErr(f`@color Name=B`, a[j]); g.colors[a[j].v] = a[j + 2].v }
         else if (h.v == 'builtin') a.forEach(x => g.builtins.add(x.v))
         else if (h.v == 'walk') {
-          const w = P.walkers[a[0]?.v]; if (!w) throw new MErr(`未注册的 walker ${a[0]?.v}`, a[0] || h)
+          const w = P.walkers[a[0]?.v]; if (!w) throw new MErr(f`未注册的 walker ${a[0]?.v}`, a[0] || h)
           g.walk = a[0].v; for (const k of w.builtins || []) g.builtins.add(k); g.fnNames = w.fns
         }
-        else throw new MErr(`未知指令 @${h.v}`, h)
+        else throw new MErr(f`未知指令 @${h.v}`, h)
         continue
       }
-      if (h.t != 'word') throw new MErr(h.t == 'bad' ? h.v : '行首应为规则名', h)
-      if (!isUpper(h.v)) throw new MErr('规则名须大写开头（小写一定是关键字字面量）', h)
-      if (g.rules.has(h.v)) throw new MErr(`重复定义 ${h.v}`, h)
+      if (h.t != 'word') throw new MErr(h.t == 'bad' ? h.v : f`行首应为规则名`, h)
+      if (!isUpper(h.v)) throw new MErr(f`规则名须大写开头（小写一定是关键字字面量）`, h)
+      if (g.rules.has(h.v)) throw new MErr(f`重复定义 ${h.v}`, h)
       M.k = 1; const params = []
       if (h.adj) { M.need('('); for (;;) { const x = M.need('word'); params.push(x.v); if (S[M.k]?.t == ',') { M.k++; continue } break } M.need(')') }
       const body = M.items(null)
-      if (M.k < S.length) throw new MErr('多余的 )', S[M.k])
+      if (M.k < S.length) throw new MErr(f`多余的 )`, S[M.k])
       g.rules.set(h.v, { params, body, h })
       g.startName ||= h.v
     } catch (e) { if (e instanceof MErr) E(e.message, e.t); else throw e }
@@ -548,8 +604,8 @@ function grammar(text, opt = {}) {
   g.inst = (name, args, at) => {
     const key = name + (args.length ? JSON.stringify(args.map(a => a.v ?? a.name)) : '')
     let I = g.insts.get(key); if (I) return I.p
-    const R = g.rules.get(name); if (!R) throw new MErr(`未定义规则 ${name}`, at)
-    if (R.params.length != args.length) throw new MErr(`${name} 需要 ${R.params.length} 个参数`, at)
+    const R = g.rules.get(name); if (!R) throw new MErr(f`未定义规则 ${name}`, at)
+    if (R.params.length != args.length) throw new MErr(f`${name} 需要 ${R.params.length} 个参数`, at)
     const env = {}; R.params.forEach((k, j) => env[k] = args[j])
     I = { p: rule(name, () => I.body) }; g.insts.set(key, I)
     try { I.body = build(R.body, env, g) } catch (e) { g.insts.delete(key); throw e }
@@ -558,7 +614,7 @@ function grammar(text, opt = {}) {
   for (const [name, R] of g.rules) if (!R.params.length) try { g.inst(name, [], R.h) } catch (e) { if (e instanceof MErr) E(e.message, e.t); else throw e }
   const sr = g.rules.get(g.startName)
   if (sr && !sr.params.length && g.insts.has(g.startName)) g.start = g.insts.get(g.startName).p
-  else if (!g.errs.length) E(`起始规则 ${g.startName || '?'} 不可用`)
+  else if (!g.errs.length) E(f`起始规则 ${g.startName || '?'} 不可用`)
   return g
 }
 
@@ -609,32 +665,45 @@ Decl  (Kwd Kwd *) "fun" Name ";"
 Kwd   (pub priv pro override -)
 Name  /[A-Za-z_]\\w*/` },
 ]
-const META = `# 元语法：用元语言描述元语言自身（规则区高亮就是用它解析的）
-@skip /(?:[ \\t]+|#[^\\n]*)+/
-@color Re=Y Lit=Y Kw=B Op=P Dir=P
-Grammar (Line /\\n/ +) :global
-Line    ((Dir Rule <) ?)
+// 元语法：v1 只描述结构；v2 在同一结构上用 Lexscope 加作用域（规则名 :def、参数 :param、引用 :ref、:scope、:global）。
+// 两版共用 META_HEAD 与 META_BODY，只有涉及名字的五六条规则不同。
+const META_HEAD = `@skip /(?:[ \\t]+|#[^\\n]*)+/
+@color Re=Y Lit=Y Kw=B Op=P Dir=P Head=G
+`
+const META_BODY = `Line    ((Dir Rule <) ?)
 Dir     /@\\w+/ (Arg *)
 Arg     (Re Lit Pair Word <)
 Pair    /\\w+=\\w+/
 Word    /\\w+/
-Rule    Head (Params ?) (Item *) :scope
-Head    /[A-Z]\\w*/ :def
-Params  (/(?<=\\w)\\(/ (Pname "," +) ")" :par)
-Pname   /[A-Z]\\w*/ :param
 Item    ((Group Re Lit "Recur" Kw Call Op <) :setRecur)
 Group   ("(" (Recur *) ")" :par)
 Call    Name (Args ?)
 Args    (/(?<=\\w)\\(/ (Arg2 "," +) ")" :par)
 Arg2    (Lit Name <)
-Name    /[A-Z]\\w*/ :ref
 Re      /\\/(?:\\\\.|\\[(?:\\\\.|[^\\]\\\\])*\\]|[^\\/\\\\\\n\\[])+\\//
 Lit     /"(?:\\\\.|[^"\\\\\\n])*"/
 Kw      /[a-z]\\w*/
-Op      /[<+*?|-]|:\\w+/`
-examples.push({ name: 'Meta（自描述）', input: META, rules: META })
+Op      /[<+*?|;-]|:\\w+/`
+const META_V1 = `# 元语法 v1：只有结构，没有作用域——引用了不存在的规则也看不出来
+${META_HEAD}Grammar (Line /\\n/ +)
+Rule    Head (Params ?) (Item *)
+Head    /[A-Z]\\w*/
+Params  (/(?<=\\w)\\(/ (Head "," +) ")" :par)
+Name    /[A-Z]\\w*/
+${META_BODY}`
+const META = `# 元语法 v2：用元语言描述元语言自身（规则区高亮就是用它解析的），在 v1 的结构上复用 Lexscope：
+# 规则名 :def 定义（绿），参数 :param（紫），Name :ref 引用；:scope 让参数只在本规则内可见，
+# :global 用全部规则名消解引用，剩下的报“未定义”。Ctrl+点击引用跳到定义
+${META_HEAD}Grammar (Line /\\n/ +) :global
+Rule    Head (Params ?) (Item *) :scope
+Head    /[A-Z]\\w*/ :def
+Params  (/(?<=\\w)\\(/ (Pname "," +) ")" :par)
+Pname   /[A-Z]\\w*/ :param
+Name    /[A-Z]\\w*/ :ref
+${META_BODY}`
+examples.push({ name: 'Meta v1（纯结构）', input: META_V1, rules: META_V1 }, { name: 'Meta v2（自描述 + Lexscope）', input: META, rules: META })
 
-const P = { FAIL, EOF, Node, walk, feed, eat, ws, re, lit, kw, seq, alt, opt, many, join, par, fn, rule, mark, recur, to, bind, funcs, lexscope, T, isT, parts, viewOf, grammar, mtok, examples, META, errsOf }
+const P = { FAIL, EOF, Node, walk, feed, eat, ws, re, lit, kw, seq, alt, opt, many, join, par, fn, rule, mark, recur, prec, to, bind, funcs, lexscope, T, isT, parts, viewOf, grammar, mtok, examples, META, META_V1, errsOf, f }
 P.funcs = {}    // 供其他模块（lisp.js）注册额外 :func
 P.walkers = {}  // @walk name：Ctrl+Enter 时对解析结果执行的遍历器 { run(value), steps(value), node(ast, value) }
 if (typeof module != 'undefined') module.exports = P

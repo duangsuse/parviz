@@ -12,6 +12,7 @@ header{display:flex;gap:12px;align-items:center;padding:4px 10px;border-bottom:1
 header b{color:var(--fg)}
 .lg span{padding:0 4px;cursor:pointer;border-radius:2px}
 .lg span:hover{background:#2f3440}
+.lg [data-c=B]{color:var(--B)}.lg [data-c=Y]{color:var(--Y)}.lg [data-c=G]{color:var(--G)}.lg [data-c=R]{color:var(--R)}.lg [data-c=P]{color:var(--P)}
 #status{margin-left:auto;color:var(--mut)}
 pre{margin:0}
 .ed{outline:none;white-space:pre-wrap;word-break:break-all;overflow:auto;padding:8px 10px;tab-size:4;caret-color:#fff}
@@ -80,6 +81,7 @@ button.on{border-color:var(--G);color:var(--G)}
 #menu.ch{border-color:var(--B)}
 #menu .hd{padding:2px 8px;color:var(--mut);border-bottom:1px solid var(--bd)}
 #menu .hd b{color:var(--fg)}
+#menu .hd .pv{background:linear-gradient(95deg, white, 1.2em, white, 1.2em, red, 50%, transparent);-webkit-background-clip:text;background-clip:text;color:transparent}
 #menu .alts{padding:2px 8px;color:var(--B);border-bottom:1px solid var(--bd)}
 #menu .alts span{padding:0 2px}
 #menu .alts .cur{background:color-mix(in srgb,var(--B) 35%,transparent);color:#fff}
@@ -106,9 +108,10 @@ button.on{border-color:var(--G);color:var(--G)}
     <option value="eval" selected>独立求值</option>
     <option value="clear">清空 [n] 标记</option>
   </select></label>
-  <label title="步进时折叠 Tsv→Table→Row→Field 这类未吃任何东西的连续进入与连续返回；Shift+→ 仍可逐个查看"><input type="checkbox" id="coll" checked> 折叠纯递归</label>
+  <label title="步进时折叠 Tsv→Table→Row→Field 这类未吃任何东西的连续进入与连续返回；Shift+→ 仍可逐个查看"><input type="checkbox" id="coll" checked> 折叠孤项递归</label>
   <label title="F8 在名字匹配的函数返回处中断；? 表示判断；其余按正则整体匹配函数名。$n 标记处总会中断">F8 中断 <input id="brk" value="?|.*" spellcheck="false"></label>
-  <span title="F12 控制台可用：$1 输入流 feed$A，$2 最后悬停的节点，$3 编译后的语法，$4 最近结果，$5.. 标记（ss.marks 可赋值）">失焦解析 · Ctrl+Enter 执行 · → 步进（← 回溯 Shift+→ 含递归返回 Esc 退出）· F8 逐步执行 · Tab 补齐 · Ctrl+点击 定义 · F12: $1–$4 $5..</span>
+  <label title="报错文本语言：常量段按 i18n/&lt;lang&gt;.json 翻译（控制台 P.f.seen 列出用到的键）">报错 <select id="lang"><option value="zh">中文</option><option value="en">English</option></select></label>
+  <span title="F12 控制台可用：$1 输入流 feed$A，$2 最后悬停的节点，$3 编译后的语法，$4 最近结果，$5.. 标记（ss.marks 可赋值）">⏯️ Ctrl+Enter 执行 · → 步进（Shift+→ 含返回:慢放规则） · F8+下面板双击:断点暂停 · Tab 补齐 · Ctrl+点击 连线到定义 · F12中可用: $1–$4 $5..</span>
   <span id="status"></span>
   <input type="color" id="picker" style="position:absolute;left:60px;top:22px;opacity:0;width:1px;height:1px;border:0;padding:0">
 </header>

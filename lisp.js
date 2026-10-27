@@ -3,11 +3,30 @@
 (function (G) {
 'use strict'
 const P = G.P || require('./parse.js')
-const { T, isT, parts, viewOf } = P
+const { T, isT, parts, viewOf } = P, tr = P.f   // tr`…`：报错文本走 parse.js 的国际化（这里 f 常作函数名，故换名）
+
+/* ======================= ⓪ 四则运算 =======================
+   热身：+ - * / 与括号。Exp 的 (Atom (- "+" "-"; "*" "/" -)) 是 parse.js 的 TDOP 算符表（; 分级，越往后越紧，左结合）；
+   -> y e 定义单个名字（Lexscope :let），:global 消解引用。:infix 把 bin 节点转成 Lisp 的调用 [+ a b]，于是直接用 Lisp 的 walker 求值。 */
+const CALC = `# 四则运算：(Atom (- "+" "-"; "*" "/" -)) 是 TDOP 风格的算符表，";" 分级，越往后结合越紧，全部左结合
+# -> y e 定义一个名字（Lexscope :let），对全部语句可见；没定义的名字报“未定义”
+@color Num=B
+@walk calc
+Calc   (Stmt ";" +) :global :tag("..")
+Stmt   (Def Exp <)
+Def    "->" Var Exp :let
+Exp    (Atom (- "+" "-"; "*" "/" -)) :infix
+Atom   (Num ("(" Exp ")" :par) Name <)
+Num    /\\d+(\\.\\d+)?/ :num
+Var    /[A-Za-z_]\\w*/
+Name   /[A-Za-z_]\\w*/ :ref`
+// bin 节点 [左 算符 右] → ["()", ["", 算符], 左, 右]；算符查 walker 的内建，不产生作用域引用
+const infix = n => n.k != 'bin' ? n.v : (([l, o, r]) => T('()', [T('', [o.text], o, [o], false), infix(l), infix(r)], n, [o, l, r]))(n.kids)
 
 /* ======================= ① 语法 =======================
    这里只剩两个 Lisp 特有的语法糖：a.(f b) 链与 (c)? A Or B。其余（lambda、定义、def 写法）都在规则里用工具包组合。 */
 const funcs = {
+  infix: (v, n) => infix(n),
   // [基, [调用...]] → [".", [".", 基, 调用1], 调用2]…；树里显示为脱糖后的 [f 基 ..]
   chain: (v, n) => {
     const [b, cs] = v; if (!cs.length) return b
@@ -89,7 +108,7 @@ for (const k in B) B[k].bname = k
 function* ev(x, env, stmt = false) {
   if (!isT(x)) return x                      // 字面量
   yield { x, n: x.node, ph: 'in' }
-  const f = Walk[x[0]]; if (!f) throw new LispErr(`未知标签 ${x[0]}`, x)
+  const f = Walk[x[0]]; if (!f) throw new LispErr(tr`未知标签 ${x[0]}`, x)
   const v = yield* f(x, env, stmt)
   yield { x, n: x.node, ph: 'out', v }
   return v
@@ -101,7 +120,7 @@ const Walk = {
     const k = x[1], e = env.find(k); if (e) return e.m.get(k)
     if (k == 'NO') return NO
     if (B[k]) return B[k]
-    throw new LispErr(`未定义 ${k}`, x)
+    throw new LispErr(tr`未定义 ${k}`, x)
   },
   // ["()", f, ...args]：调用
   *'()'(x, env) { return yield* apply(x.slice(1), env, null, x) },
@@ -128,7 +147,7 @@ const Walk = {
   // [".", 基, 调用]：基插为调用的第一个实参
   *'.'(x, env, stmt) {
     const b = yield* ev(x[1], env, stmt), c = x[2]
-    if (!isT(c) || (c[0] != '()' && c[0] != '[]')) throw new LispErr('. 之后应为 (..) 或 [..]', x)
+    if (!isT(c) || (c[0] != '()' && c[0] != '[]')) throw new LispErr(tr`. 之后应为 (..) 或 [..]`, x)
     return yield* apply(c.slice(1), env, [b], c)
   },
 }
@@ -144,17 +163,19 @@ function* call(f, args, x) {
     const e = new Env(f.env); f.params.forEach((p, i) => e.m.set(p, i < args.length ? args[i] : NO))
     v = yield* body(f.body, e, f.node)
   } else if (typeof f == 'function') v = f.gen ? yield* f(...args) : f(...args)
-  else throw new LispErr(`${show(f, 1)} 不可调用`, x)
+  else throw new LispErr(tr`${show(f, 1)} 不可调用`, x)
   yield { x, n: x?.node || (f.t == 'fn' ? f.node : null), ph: 'ret', f, args, v }
   return v
 }
-// 函数体/程序：单语句直接取值；多语句必须用 OK 返回
-function* body(items, env, n) {
+// 函数体/程序：单语句直接取值；多语句必须用 OK 返回（last：像 Calc 那样取最后一句的值）
+function* body(items, env, n, last) {
   try {
     if (items.length == 1) return yield* ev(items[0], env, true)
-    for (const y of items) yield* ev(y, env, true)
+    let v = NO
+    for (const y of items) v = yield* ev(y, env, true)
+    if (last) return v
   } catch (e) { if (e instanceof Ret) return e.v; throw e }
-  if (items.length) warn('多语句缺少 OK 返回', n)
+  if (items.length) warn(tr`多语句缺少 OK 返回`, n)
   return NO
 }
 
@@ -165,24 +186,31 @@ const globals = log => { const e = new Env(null); e.m.set('print', Object.assign
 const isDef = s => isT(s) && s[0] == '='
 // 逐步执行：迭代器产出上述事件；结束时 done.value = {value} | {err, x}，均带 log。
 // prog 是根 ["..", 语句...]；ast 不是根时（独立求值）先执行顶层定义再单独求值 ast
-function* steps(ast, prog = ast) {
+function* steps(ast, prog = ast, last = false) {
   const log = []; LOG = log
   try {
     const env = globals(log), stmts = prog.slice(1)
-    if (ast === prog) return { value: yield* body(stmts, env, prog.node), log }
+    if (ast === prog) return { value: yield* body(stmts, env, prog.node, last), log }
     for (const s of stmts) if (isDef(s) && s !== ast) try { yield* ev(s, env, true) } catch (e) { if (!(e instanceof LispErr)) throw e }
     return { value: yield* ev(ast, env, stmts.includes(ast)), log }
   }
   catch (e) { if (e instanceof Ret) return { value: e.v, log }; if (e instanceof LispErr || e instanceof RangeError || e instanceof TypeError) return { err: e.message, x: e.x, log }; throw e }
   finally { LOG = null }
 }
-const drive = (it, max = 300000) => { let r, n = 0; while (!(r = it.next()).done) if (++n > max) return { err: `超过 ${max} 步，已中止`, log: [] }; return { ...r.value, steps: n } }
+const drive = (it, max = 300000) => { let r, n = 0; while (!(r = it.next()).done) if (++n > max) return { err: tr`超过 ${max} 步，已中止`, log: [] }; return { ...r.value, steps: n } }
 const run = prog => drive(steps(prog))
 const node = (ast, prog) => drive(steps(ast, prog))
 const fns = new Set([...Object.keys(B), 'print'])
 P.walkers.lisp = { run, steps, node, show, fname, builtins: new Set([...fns, 'NO']), fns }
+// Calc：同一个 walker，程序取最后一句的值
+P.walkers.calc = { ...P.walkers.lisp, run: prog => drive(steps(prog, prog, true)), steps: (ast, prog) => steps(ast, prog, true) }
 
 P.examples.splice(4, 0, {
+  name: '四则运算（TDOP）', rules: CALC, input: `-> x 5;
+-> y x+1;
+-> y1 x*2;
+(y + y1) * 2 - x / 5`,
+}, {
   name: 'Lisp', rules: RULES, input: `; 语句位置的 [..] 是调用；[e1].[e2] 即 (e1).(e2 ..) 即 [e2 [e1] ..]
 [= big (=> (xs n) xs.(mapNotNO (=> (x) (> x n)? x Or NO)))]
 def fact(n) (<= n 1)? 1 Or (* n (fact (- n 1)))
@@ -198,7 +226,7 @@ def twice(f x) (f (f x))
 (OK {sum (add 1 2) xs [1 2 (3 ] ok "fine"})`,
 })
 
-const L = { NO, Ret, LispErr, B, Walk, Env, ev, steps, run, node, show, fname, truthy, RULES, funcs }
+const L = { NO, Ret, LispErr, B, Walk, Env, ev, steps, run, node, show, fname, truthy, RULES, CALC, funcs }
 if (typeof module != 'undefined') module.exports = L
 G.LISP = L
 })(typeof globalThis != 'undefined' ? globalThis : window)

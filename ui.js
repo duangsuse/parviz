@@ -107,34 +107,47 @@ const showRule = name => { const R = S.g?.rules.get(name); if (R) { rules.setSel
 
 // 占位实现：只留最近一次调用，写进 #out .val，并显示该词条被编辑了几遍
 const defaultOnedit = (o, n, info) => {
-  const q = (t, l) => t == null ? 'null' : JSON.stringify(clip((l ?? '') + t, 30))
-  S.onedit = info.init ? `onedit 初始通知（${info.count} 个词条）` : `onedit(${q(o, info.left?.[0])}, ${q(n, info.left?.[1])})  第 ${info.count} 遍`
+  const q = t => t == null ? 'null' : JSON.stringify(clip(t, 30))
+  S.onedit = info.init ? `onedit 初始通知（${info.count} 个词条）` : `onedit(${q(o)}, ${q(n)})  第 ${info.count} 遍`
   const v = $('#out .val .oe'); if (v) v.textContent = `   // ${S.onedit}`
 }
-/* ---------- onedit 的 hashline：词条哈希取自身文本及左侧一个字符；解析完先通知一遍，之后只对哈希变了的词条调用 ---------- */
+/* ---------- onedit 的 hashline：词条哈希 = 自身文本 + 左侧至行首的字符；解析完先通知一遍，之后只在有变更时调用 ----------
+   对齐：哈希相同的公共前缀/后缀不动（行首上下文让对齐不跨行误配）；中间段按文本做 LCS，
+   文本相同的只是被左边的编辑带着改了哈希，不算编辑；其余按位置配对成 改/增/删。 */
 const hash4 = s => { let x = 0x811c9dc5; for (let i = 0; i < s.length; i++) x = Math.imul(x ^ s.charCodeAt(i), 16777619); return (x >>> 16).toString(16).padStart(4, '0') }
 const Edits = {
-  seq: null,   // 上一次的词条序列 [{h, t, l, n, cnt, glued}]；换示例/改语法时清空
+  seq: null,   // 上一次的词条序列 [{h, t, n, cnt}]；换示例/改语法时清空
   sync(ss) {
-    const s = ss.src, now = []; let pb = -1
+    const s = ss.src, now = []
     walk(ss.tree, n => {
       if (n.kids.length || n.b <= n.a || n.k == 'err') return
-      const t = s.slice(n.a, n.b), l = s[n.a - 1] ?? ''
-      now.push({ h: hash4(l + t), t, l, n, cnt: 0, glued: pb == n.a }); pb = n.b
+      const t = s.slice(n.a, n.b)
+      now.push({ h: hash4(s.slice(s.lastIndexOf('\n', n.a - 1) + 1, n.a) + t), t, n, cnt: 0 })
     })
     const old = this.seq; this.seq = now
     if (!old) { ss.onedit(null, s, { init: true, count: now.length }); return }
-    // 与上一次按哈希对齐：公共前缀/后缀不动，中间段按位置配对
     const O = old.length, N = now.length; let p = 0, q = 0
     while (p < O && p < N && old[p].h == now[p].h) now[p].cnt = old[p++].cnt
     while (q < O - p && q < N - p && old[O - 1 - q].h == now[N - 1 - q].h) { now[N - 1 - q].cnt = old[O - 1 - q].cnt; q++ }
-    for (let k = 0; k < Math.max(O, N) - p - q; k++) {
-      const o = p + k < O - q ? old[p + k] : null, x = p + k < N - q ? now[p + k] : null
-      const same = o && x && o.t == x.t
-      if (same && x.glued) { x.cnt = o.cnt; continue }   // 只因紧贴的左邻词条改了：不算编辑
+    for (const [o, x] of this.align(old.slice(p, O - q), now.slice(p, N - q))) {
+      if (o && x && o.t == x.t) { x.cnt = o.cnt; continue }
       if (x) x.cnt = (o?.cnt ?? 0) + 1
-      ss.onedit(o?.t ?? null, x?.t ?? null, { count: x ? x.cnt : o.cnt, node: x?.n, hash: x?.h, left: same ? [o.l, x.l] : undefined })
+      ss.onedit(o?.t ?? null, x?.t ?? null, { count: x ? x.cnt : o.cnt, node: x?.n, hash: x?.h })
     }
+  },
+  // 中间段：文本 LCS 匹配，两次匹配之间的未匹配段按位置配对；太大时直接按位置
+  align(A, B) {
+    const m = A.length, w = B.length, out = [], zip = (a, b) => { for (let k = 0; k < Math.max(a.length, b.length); k++) out.push([a[k] ?? null, b[k] ?? null]) }
+    if (m * w > 4e5) { zip(A, B); return out }
+    const L = new Int32Array((m + 1) * (w + 1)), at = (i, j) => i * (w + 1) + j
+    for (let i = m - 1; i >= 0; i--) for (let j = w - 1; j >= 0; j--) L[at(i, j)] = A[i].t == B[j].t ? L[at(i + 1, j + 1)] + 1 : Math.max(L[at(i + 1, j)], L[at(i, j + 1)])
+    let i = 0, j = 0, ra = [], rb = []
+    while (i < m || j < w) {
+      if (i < m && j < w && A[i].t == B[j].t) { zip(ra, rb); ra = []; rb = []; out.push([A[i++], B[j++]]) }
+      else if (j < w && (i == m || L[at(i, j + 1)] >= L[at(i + 1, j)])) rb.push(B[j++])
+      else ra.push(A[i++])
+    }
+    zip(ra, rb); return out
   },
 }
 /* ---------- 标记：ss.marks = [Node | 偏移 | [a,b] | {a,b,line}]，第 k 个即 $(5+k) ---------- */
@@ -202,6 +215,7 @@ function treeDOM(root, ss, o) {
     if (n.view) return viewEl(n.view, n)
     const c = colorOf(n, o.colors) || inh
     if (n.k == 'err') { const e = nd(n, 'R err', [n.b > n.a ? clip(ss.src.slice(n.a, n.b)) : '😡😡😡']); e.title = n.err; return e }
+    if (n.k == 'bin') return box(n, n.kids[1].text, [n.kids[0], n.kids[2]].flatMap(k => flat(k, c)))   // 算符表：[+ 左 右]
     if (!n.kids.length) return tok(n, c)
     if (n.k == 'rule') {
       const lf = leaf(n, inh)
@@ -243,6 +257,7 @@ function gDOM(g, o) {
     if (p.kind == 'kw') return tk('B', p.label)
     if (p.kind == 'recur') return tk('P', 'Recur')
     if (p.kind == 'kwset') return box(p.empty ? 'kwd -' : 'kwd', p.words.map(w => tk('B', w)), ++id)
+    if (p.kind == 'prec') return box('- 算符表', [pv(p.parts[0]), ...p.levels.flatMap((L, l) => [l ? tk('', ';') : null, ...L.map(pv)]).filter(Boolean)], ++id)   // 操作数 + 各级（; 分隔，越往后越紧）
     return box(p.kind == 'fn' ? p.fname : OPS[p.kind], p.parts.filter(Boolean).map(pv), ++id)
   }
   const hd = h('div', 'gh', `起始 ${g.startName}  @skip ${g.skip ? '/' + g.skip.source + '/' : 'none'}${g.walk ? '  @walk ' + g.walk : ''}  配对 ${g.pairs.map(p => p.join('')).join(' ') || '∅'}  颜色 ${Object.entries(g.colors).map(kv => kv.join('=')).join(' ') || '∅'}`)
@@ -532,7 +547,8 @@ const Step = {
     this.main = vis.map((k, j) => {
       if (!S.collapse) return true
       const e = E(j)
-      if (e.t == 'in') return ruleIn(j) && !leaf(j) && !(ruleIn(j + 1) && !leaf(j + 1) && E(j + 1).a == e.a)
+      // 下一个是同位置的规则进入：若它不是叶规则，或处于有序选择中（这一层含判定），本层折叠
+      if (e.t == 'in') return ruleIn(j) && !leaf(j) && !(ruleIn(j + 1) && E(j + 1).a == e.a && (!leaf(j + 1) || E(j + 1).ch))
       const pv = E(j - 1)
       return !(pv && pv.t == 'out' && pv.b == e.b)
     })
@@ -561,10 +577,11 @@ const Step = {
     const eaten = e.t == 'out' && e.ok && e.b > e.a, el = eaten && astEl(e.a, e.b, e.n?.r)   // 吃下：临时箭头连到对应 AST
     if (el) el.scrollIntoView({ block: 'nearest' })
     Sloc.link = el ? { el, a: e.a, b: e.b } : null
-    const desc = e.t == 'in' ? `→ ${preview(ss.src, e.a)}` : `✓ 吃下 ${clip(ss.src.slice(e.a, e.b).replace(/\s*\n\s*/g, '⏎'))}`
+    // 进入：原文往右 10 个字符，不加省略号，用红色渐变淡出（.pv）
+    const desc = e.t == 'in' ? ['→ ', h('span', 'pv', ss.src.slice(e.a, e.a + 10).replace(/\s*\n\s*/g, '⏎'))] : [`✓ 吃下 ${clip(ss.src.slice(e.a, e.b).replace(/\s*\n\s*/g, '⏎'))}`]
     status(`步进 ${this.i + 1}/${n}  ${ss.sloc(pos)}${e.ch ? '  选择中' : ''}`)
     popup(pos, m => {
-      m.append(h('div', 'hd', h('b', null, desc), `  ${this.i + 1}/${n}`))
+      m.append(h('div', 'hd', h('b', null, ...desc), `  ${this.i + 1}/${n}`))
       if (e.ch && e.al) {   // 处于有序选择中（蓝色）时列出这个选择包含的各项
         const al = h('div', 'alts', '(')
         e.al.xs.forEach((x, j) => { const s = h('span', j == e.al.j ? 'cur' : null, clip(x, 14)); s.dataset.rule = x; al.append(s) })
@@ -578,6 +595,23 @@ const Step = {
 $('#coll').onchange = e => { S.collapse = e.target.checked; if (Step.on) { Step.recalc(); Step.show() } }
 
 /* ---------- 逐步执行（@walk 的生成器 walker） ---------- */
+// [= f (=> ..)]、定义处函数名、引用处函数名上的标记 = 函数断点：像表达式断点的返回一样，在该函数每次返回时一次性显示 [f 实参..] ⇒ 返回值
+// 返回 { bp: lambda 节点→标记序号, moved: 改作函数断点的标记序号 }
+function fnBreaks(prog, marks) {
+  const bp = new Map, moved = new Set; if (!marks.length) return { bp, moved }
+  const at = (n, m) => n && m.a == n.a && m.b == n.b
+  const go = x => {
+    if (!P.isT(x)) return
+    if (x[0] == '=' && P.isT(x[2]) && x[2][0] == '=>') {
+      // 标记可能落在包着引用词条的外层节点上（同区间的 seq/规则）：在其子树里找同区间且带 .def 的节点
+      const nm = x.ns[0], d = m => { let r = null; if (m.n) walk(m.n, y => { if (r || y.b < m.a || y.a > m.b) return false; if (y.def && y.a == m.a && y.b == m.b) r = y.def }); return r }
+      const k = marks.findIndex(m => at(x.node, m) || at(nm, m) || (d(m) && nm && nm.a <= d(m).a && d(m).b <= nm.b))
+      if (k >= 0) { moved.add(k); bp.set(x[2].node, k) }
+    }
+    for (const y of x.slice(1)) go(y)
+  }
+  go(prog); return { bp, moved }
+}
 const EvStep = {
   it: null, n: 0, w: null,
   start() {
@@ -590,10 +624,13 @@ const EvStep = {
   next() {
     if (!this.it && !this.start()) return
     const marks = Marks.list(), mk = n => n ? marks.findIndex(m => m.n === n || (m.a == n.a && m.b == n.b)) : -1, B = this.brk()
+    const { bp, moved } = fnBreaks(S.ss.value, marks)
     for (let g = 0; g < 1e6; g++) {
       const r = this.it.next(); this.n++
       if (r.done) { const n = this.n; this.stop(); setResult({ run: r.value, show: this.w.show, label: `逐步执行完毕（${n} 步）` }); return }
-      const e = r.value, k = mk(e.n)
+      const e = r.value; let k = mk(e.n)
+      if (moved.has(k)) k = -1                                                            // 定义/函数名本身不停
+      if (k < 0 && e.ph == 'ret' && e.f?.t == 'fn' && bp.has(e.f.node)) k = bp.get(e.f.node)   // 改停在该函数返回时
       if (k >= 0 || (e.n && ((e.ph == 'if' && B.dec) || (e.ph == 'ret' && B.re?.test(this.w.fname(e.f)))))) return this.show(e, k)
     }
   },
@@ -720,4 +757,13 @@ function load(i) {
 }
 sel.onchange = () => load(+sel.value)
 if (!window.CSS?.highlights) status('此浏览器不支持 CSS Custom Highlight API，高亮不可用')
+
+/* ---------- 报错语言：i18n/<lang>.json 翻译 f`` 的常量段；切换后重新编译与解析 ---------- */
+const langSel = $('#lang')
+async function setLang(l) {
+  try { P.f.dict = l == 'zh' ? {} : await (await fetch(`i18n/${l}.json`)).json() } catch (e) { status(`加载 i18n/${l}.json 失败：${e.message}`); return }
+  langSel.value = l; localStorage.setItem('parviz.lang', l); compile()
+}
+langSel.onchange = () => setLang(langSel.value)
 load(0)
+if ((localStorage.getItem('parviz.lang') || 'zh') != 'zh') setLang(localStorage.getItem('parviz.lang'))
