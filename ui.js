@@ -373,7 +373,7 @@ toolSel.addEventListener('wheel', e => {
 
 /* ---------- sloc：全屏打标、连线、goto ---------- */
 const Sloc = {
-  svg: $('#ov svg g'), mks: $('#mks'), hov: null, link: null,
+  svg: $('#ov svg g'), mks: $('#mks'), hov: null, link: null, ref: null, rev: null,
   hover(n, el) {
     this.hov = n ? { n, el } : null
     HL.set('hov', n ? { hov: [src.range(n.a, Math.max(n.b, n.a + 1))] } : {})
@@ -381,12 +381,33 @@ const Sloc = {
     this.draw()
   },
   label(txt, r, cls, on) { const m = h('div', 'mk ' + (cls || ''), txt); m.style.left = r.left + 'px'; m.style.top = r.top + 'px'; Object.assign(m, on); this.mks.append(m); return m },
-  path(a, b, cls) {  // 从 a 的上沿到 b 的下沿画曲线
-    const x1 = a.left + Math.min(a.width, 30) / 2, y1 = a.top, x2 = b.left + Math.min(b.width, 30) / 2, y2 = b.bottom
-    const p = document.createElementNS('http://www.w3.org/2000/svg', 'path'), my = (y1 + y2) / 2
-    p.setAttribute('d', `M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}`); if (cls) p.setAttribute('class', cls)
-    if (cls == 'ar') p.setAttribute('marker-start', 'url(#ah)')   // 箭头指向 a（树里的 AST）
-    this.svg.append(p)
+  path(a, b, cls, ref) {  // a、b 连线：两端各落在朝向对方的边上；cls 'ar' 时箭头扎进 a 那条边；ref：同编辑区内的引用箭头
+    const mid = r => ({ x: r.left + r.width / 2, y: r.top + r.height / 2 })
+    const edge = (r, dx, dy) => {   // r 上朝 (dx,dy) 的边：点 + 外法线（竖直方向略占优）
+      if (Math.abs(dy) > Math.abs(dx) * .5) return { p: { x: r.left + Math.min(r.width, 30) / 2, y: dy > 0 ? r.bottom : r.top }, n: { x: 0, y: dy > 0 ? 1 : -1 } }
+      return { p: { x: dx > 0 ? r.right : r.left, y: r.top + r.height / 2 }, n: { x: dx > 0 ? 1 : -1, y: 0 } }
+    }
+    const ac = mid(a), bc = mid(b)
+    const A = edge(a, bc.x - ac.x, bc.y - ac.y), B = edge(b, ac.x - bc.x, ac.y - bc.y)   // A = 箭头那端
+    // 跨面板：按距离外推 12–60px；同一编辑区内的引用（ref）：控制点只取纵向间距的一半，不跨出两行之外
+    const d = ref ? Math.abs(ac.y - bc.y) / 2 : Math.min(140, Math.max(12, Math.hypot(A.p.x - B.p.x, A.p.y - B.p.y) / 2.5))
+    const c1 = { x: B.p.x + B.n.x * d, y: B.p.y + B.n.y * d }, c2 = { x: A.p.x + A.n.x * d, y: A.p.y + A.n.y * d }
+    const ar = cls == 'ar', L = 12, W = 11
+    const tip = A.p, base = { x: tip.x + A.n.x * L, y: tip.y + A.n.y * L }   // 三角底在 a 外面，尖端扎进边里
+    const q = { x: -A.n.y * W / 2, y: A.n.x * W / 2 }
+    const flat = ar && Math.abs(ac.y - bc.y) < Math.max(a.height || 16, b.height || 16) * .5   // 同一行：横线会压着代码，只留箭头
+    if (!flat) {
+      const p = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+      p.setAttribute('d', `M${B.p.x},${B.p.y} C${c1.x},${c1.y} ${c2.x},${c2.y} ${(ar ? base : tip).x},${(ar ? base : tip).y}`)
+      if (cls) p.setAttribute('class', cls)
+      this.svg.append(p)
+    }
+    if (ar) {
+      const hd = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+      hd.setAttribute('d', `M${tip.x},${tip.y} L${base.x + q.x},${base.y + q.y} L${base.x - q.x},${base.y - q.y}Z`)
+      hd.setAttribute('class', 'ah')
+      this.svg.append(hd)
+    }
   },
   inView(el, r) { const c = el.getBoundingClientRect(); return r.bottom > c.top && r.top < c.bottom && r.right > c.left && r.left < c.right },
   draw() {
@@ -409,6 +430,10 @@ const Sloc = {
     if (hv?.el?.offsetParent) { const r = src.rect(hv.n.a, Math.max(hv.n.b, hv.n.a + 1)); if (src.visible(r)) this.path(hv.el.getBoundingClientRect(), r) }
     if (hv?.from) this.path(hv.from, hv.to, hv.cls)
     const lk = this.link; if (lk?.el.isConnected && lk.el.offsetParent) this.path(lk.el.getBoundingClientRect(), src.rect(lk.a, lk.b), 'ar')
+    const rf = this.ref
+    if (rf?.d) { const e = rf.ed, a = e.rect(rf.d.a, rf.d.b), b = e.rect(rf.u.a, rf.u.b); if (e.visible(a) && e.visible(b)) this.path(a, b, 'ar', 1) }   // 箭头指向定义
+    const rv = this.rev
+    if (rv?.decl) { const e = rv.ed, dr = e.rect(rv.decl.a, rv.decl.b); for (const u of rv.uses) { const ur = e.rect(u.a, Math.max(u.b, u.a + 1)); if (e.visible(ur)) this.path(ur, dr, 'ar', 1) } }   // 箭头扎在每处引用上：同一行不画线段，只靠箭头标记
   },
 }
 function goto(a, b = a, keepFocus) {
@@ -424,14 +449,19 @@ const fmt = (v, show) => {
   try { return clip(JSON.stringify(v) ?? String(v), 3000) } catch { return String(v) }
 }
 function setResult(res) { S.res = res; window.$4 = res.run ? (res.run.err ? undefined : res.run.value) : res.v; renderOut() }
+const textEnd = el => {   // 错误行文字右端的零宽矩形：连线从右侧引出
+  const rg = document.createRange(); rg.selectNodeContents(el)
+  const rs = rg.getClientRects(), q = rs[rs.length - 1]
+  return q ? { left: q.right, right: q.right, top: q.top, bottom: q.bottom, width: 0, height: q.height } : el.getBoundingClientRect()
+}
 function renderOut() {
   const out = $('#out'), ss = S.ss; out.textContent = ''
+  if (Sloc.hov?.from) Sloc.hover(null)   // 输出重排，旧的错误连线作废
   out.append(h('div', 'cm', '// try ss.onedit=alert'))
   ss?.errs.forEach((e, k) => {
     const it = h('span', 'eitem', `E${k + 1} ${ss.sloc(e.a)}  ${e.msg}`)
     it.onclick = () => goto(e.a, e.b)
-    it.onmouseenter = () => { Sloc.hov = { from: it.getBoundingClientRect(), to: src.rect(e.a, Math.max(e.b, e.a + 1)), cls: 'e' }; HL.set('hov', { hov: [src.range(e.a, Math.max(e.b, e.a + 1))] }); Sloc.draw() }
-    it.onmouseleave = () => Sloc.hover(null)
+    it.onmouseenter = () => { Sloc.hov = { from: textEnd(it), to: src.rect(e.a, Math.max(e.b, e.a + 1)), cls: 'e' }; HL.set('hov', { hov: [src.range(e.a, Math.max(e.b, e.a + 1))] }); Sloc.draw() }
     out.append(it)
   })
   const r = S.res, oe = h('span', 'oe cm', S.onedit ? `   // ${S.onedit}` : '')
@@ -444,6 +474,8 @@ function renderOut() {
 }
 
 /* ---------- 解析 / 执行 ---------- */
+$('#out').addEventListener('mouseleave', () => { if (Sloc.hov?.from) Sloc.hover(null) })   // 指针离开输出区才收起错误连线
+
 function parse() {
   clearTimeout(S.timer); S.timer = 0; Step.stop(); EvStep.stop()
   const focused = document.activeElement === src.el, sel = focused ? src.caret() : null
@@ -454,6 +486,7 @@ function parse() {
   const t0 = performance.now(); let v
   try { v = eat(S.g, ss) } catch (e) { status('解析异常：' + e.message); console.error(e); return }
   S.ss = ss; S.stale = false; window.ss = window.$1 = ss; window.$3 = S.g; S.zoom = null   // 新树：子树缩放失效
+  Sloc.rev = Sloc.ref = null   // 节点换了，反查箭头作废
   paint(src, ss.tree, S.g.colors); renderTree(); Marks.changed(); Edits.sync(ss)
   setResult({ v, label: ` ${(performance.now() - t0).toFixed(1)}ms · ${ss.errs.length} 个错误` }); syncHash()
   if (sel && document.activeElement !== src.el) { src.el.focus(); src.setSel(...sel) }   // 结构性编辑后恢复光标
@@ -518,6 +551,7 @@ document.addEventListener('pointerup', () => { S.down = false; if (S.pendingPars
 function paintRules() {
   rules.fix()
   const rss = feed(rules.value, 'feed$R'); eat(S.meta, rss); S.rss = rss
+  if (Sloc.rev?.ed === rules) Sloc.rev = null
   paint(rules, rss.tree, S.meta.colors, S.g ? S.g.errs : [])
   const box = $('#rerr'); box.textContent = ''
   const errs = [...(S.g?.errs || []).map(e => ({ ...e, msg: '编译：' + e.msg })), ...rss.errs.map(e => ({ ...e, msg: '元语法：' + e.msg }))]
@@ -775,18 +809,33 @@ src.el.addEventListener('mousedown', () => { if (Step.on) Step.stop() })
 document.addEventListener('paste', e => { if (performance.now() - S.midAt < 500) e.preventDefault() }, true)   // 中键点树引起的粘贴：别写进输入区
 menu.addEventListener('mouseover', e => { const r = e.target.closest('[data-rule]'); if (r) showRule(r.dataset.rule) })
 
-// Ctrl+点击跳到定义；普通悬停联动树节点
-function jumpDef(ed, ss, e, after) {
-  const i = ed.offsetAt(e.clientX, e.clientY); if (i < 0 || !ss?.tree) return
-  const n = deepest(ss.tree, i, n => n.def); if (!n) { status('此处没有可跳转的定义'); return }
-  e.preventDefault(); ed.setSel(n.def.a, n.def.b); ed.scrollTo(n.def.a); after?.(n)
+/* ---------- 作用域：悬停引用连线到定义，点引用翻页跳到定义，点声明用箭头反查引用 ---------- */
+const declAt = (ss, i) => { let d = null; walk(ss.tree, n => { for (const x of n.defs || []) if (x.node && i >= x.node.a && i < x.node.b) d = x }); return d }
+const usesOf = (ss, tok) => { const u = []; walk(ss.tree, n => { if (n.def === tok && n !== tok) u.push(n) }); return u }
+function wireScope(ed, ssOf) {
+  let refHot = null, saved = ''
+  const at = e => { const ss = ssOf(); if (!ss?.tree || ss.src !== ed.value) return null; const i = ed.offsetAt(e.clientX, e.clientY); return i < 0 ? null : { ss, i } }
+  ed.el.addEventListener('mousemove', e => {
+    const a = at(e), u = a && deepest(a.ss.tree, a.i, n => n.def), d = u?.def || null
+    if (d === refHot) return
+    refHot = d; Sloc.ref = d ? { ed, d, u } : null
+    if (d) { if (!saved) saved = $('#status').textContent; status(`定义于 ${a.ss.sloc(d)} · 点击跳到`) }
+    else { status(saved); saved = '' }
+    Sloc.draw()
+  })
+  ed.el.addEventListener('mouseleave', () => { if (!refHot) return; refHot = null; Sloc.ref = null; status(saved); saved = ''; Sloc.draw() })
+  ed.el.addEventListener('click', e => {   // 点引用：翻页跳到定义；点声明：箭头反查全部引用
+    const a = at(e); if (!a) return
+    const { ss, i } = a, u = deepest(ss.tree, i, n => n.def)
+    if (u) { ed.setSel(u.def.a, u.def.b); ed.scrollTo(u.def.a); status(`定义于 ${ss.sloc(u.def)}，共 ${usesOf(ss, u.def).length} 处引用`); Sloc.draw(); return }
+    const d = declAt(ss, i); if (!d) { if (Sloc.rev) { Sloc.rev = null; Sloc.draw() } return }
+    const on = Sloc.rev?.decl === d.node
+    Sloc.rev = on ? null : { ed, decl: d.node, uses: usesOf(ss, d.node) }
+    status(on ? '' : `${d.name}：${Sloc.rev.uses.length} 处引用`)
+    Sloc.draw()
+  })
 }
-src.el.addEventListener('click', e => {
-  if (!(e.ctrlKey || e.metaKey)) return
-  jumpDef(src, S.ss, e, n => { Sloc.hov = { from: src.rect(n.def.a, n.def.b), to: src.rect(n.a, n.b) }; status(`定义于 ${S.ss.sloc(n.def)}`); Sloc.draw(); setTimeout(() => { Sloc.hov = null; Sloc.draw() }, 1500) })
-})
-rules.el.addEventListener('click', e => { if (e.ctrlKey || e.metaKey) jumpDef(rules, S.rss, e) })
-let hot = null
+let hot = null   // 悬停联动树节点
 src.el.addEventListener('mousemove', e => {
   if (!S.ss?.tree || S.ss.src !== src.value) return
   const i = src.offsetAt(e.clientX, e.clientY), n = i < 0 ? null : deepest(S.ss.tree, i, n => S.elOf.has(n)), el = n && S.elOf.get(n)
@@ -795,6 +844,8 @@ src.el.addEventListener('mousemove', e => {
 })
 src.el.addEventListener('mouseleave', () => { hot?.classList.remove('hot'); hot = null })
 src.el.addEventListener('scroll', () => Sloc.draw())
+rules.el.addEventListener('scroll', () => Sloc.draw())
+wireScope(src, () => S.ss); wireScope(rules, () => S.rss)
 addEventListener('resize', () => Sloc.draw())
 hookTree($('#tree'))
 

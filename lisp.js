@@ -225,7 +225,7 @@ const drive = (it, max = 300000) => { let r, n = 0; while (!(r = it.next()).done
 const run = prog => drive(steps(prog))
 const node = (ast, prog) => drive(steps(ast, prog))
 const fns = new Set([...Object.keys(B), 'print'])
-P.walkers.lisp = { run, steps, node, show, fname, builtins: new Set([...fns, 'NO']), fns }
+P.walkers.lisp = { run, steps, node, show, fname, builtins: new Set([...fns, 'NO']) }
 // Calc：同一个 walker，程序取最后一句的值
 P.walkers.calc = { ...P.walkers.lisp, run: prog => drive(steps(prog, prog, true)), steps: (ast, prog) => steps(ast, prog, true) }
 

@@ -8,7 +8,7 @@ const FAIL = Symbol('FAIL'), EOF = Symbol('EOF')
    k: tok|kw|lit|seq|alt|join|many|opt|par|rule|err|top
    a,b: 源码区间；v: 后处理后的值；r: 规则名；alt: 规则体有序选择所选分支；c: 颜色 B/Y/G/R/P；err: 报错信息
    作用域接口：free=[{name,node}] 未绑定引用，defs=[{name,node,kind}] 定义，自底向上汇总；
-   node.def 指向绑定到的定义节点（Ctrl+点击跳转用）。
+   node.def 指向绑定到的定义节点（悬停连线、点击跳转用）。
    多态显示：:func 可设 node.view = {tag, kids:[Node|view]}，树视图按它显示为 [tag ..]（如 Lisp 的 [= big [=> ..]]）。 */
 class Node {
   constructor(k, a, b, kids = []) {
@@ -356,7 +356,7 @@ function viewOf(a) {
 
 /* ---------- Lexscope 工具包：词法作用域在组合层完成 ----------
    引用产生 free=[{name,node}]，定义产生 defs=[{name,node,kind}]，二者随 CST 自底向上汇总；
-   bind 在某个节点处用 defs 消解 free（node.def 指向定义，参数紫色、函数绿色）。
+   bind 在某个节点处用 defs 消解 free（node.def 指向定义；引用不染色，只有声明 G、参数 P 上色）。
    语法里用 :ref :def :param :scope :arg2nth :fn :let :defn :global 组合出任何“定义/lambda”语法：
    (=> (a b) e)、[= f (=> (a b) e)]、def f(a b) e 得到完全相同的 AST 与作用域。 */
 const bind = (n, defs) => {
@@ -364,7 +364,7 @@ const bind = (n, defs) => {
   const m = new Map(defs.map(d => [d.name, d]))
   n.free = n.free.filter(r => {
     const d = m.get(r.name); if (!d) return true
-    if (r.node !== d.node) { r.node.def = d.node; if (d.kind == 'param') r.node.c = 'P'; else if (d.kind == 'fn' || d.kind == 'rule') r.node.c = 'G' }
+    if (r.node !== d.node) { r.node.def = d.node; if (d.kind == 'param') r.node.c = 'P' }   // 引用保持原色：G 只标声明
     return false
   })
 }
@@ -407,7 +407,7 @@ const lexscope = {
   global: (v, n, ss) => {
     bind(n, n.defs)
     for (const r of n.free || []) {
-      if (ss.builtins.has(r.name)) { if (ss.g?.fnNames?.has(r.name)) r.node.c = 'G'; continue }
+      if (ss.builtins.has(r.name)) continue
       r.node.err = f`未定义 ${r.name}`
     }
     return v
@@ -585,7 +585,7 @@ function grammar(text, opt = {}) {
         else if (h.v == 'builtin') a.forEach(x => g.builtins.add(x.v))
         else if (h.v == 'walk') {
           const w = P.walkers[a[0]?.v]; if (!w) throw new MErr(f`未注册的 walker ${a[0]?.v}`, a[0] || h)
-          g.walk = a[0].v; for (const k of w.builtins || []) g.builtins.add(k); g.fnNames = w.fns
+          g.walk = a[0].v; for (const k of w.builtins || []) g.builtins.add(k)
         }
         else throw new MErr(f`未知指令 @${h.v}`, h)
         continue
@@ -693,7 +693,7 @@ Name    /[A-Z]\\w*/
 ${META_BODY}`
 const META = `# 元语法 v2：用元语言描述元语言自身（规则区高亮就是用它解析的），在 v1 的结构上复用 Lexscope：
 # 规则名 :def 定义（绿），参数 :param（紫），Name :ref 引用；:scope 让参数只在本规则内可见，
-# :global 用全部规则名消解引用，剩下的报“未定义”。Ctrl+点击引用跳到定义
+# :global 用全部规则名消解引用，剩下的报“未定义”。引用不染色：悬停连线、点引用跳定义、点声明反查
 ${META_HEAD}Grammar (Line /\\n/ +) :global
 Rule    Head (Params ?) (Item *) :scope
 Head    /[A-Z]\\w*/ :def

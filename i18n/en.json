@@ -46,7 +46,6 @@
   "parviz — 递归下降可视化": "parviz — recursive descent visualizer",
   "B 数字": "B num",
   "Y 字符串": "Y str",
-  "G 函数名": "G fn",
   "R 错误": "R err",
   "P 参数": "P for params",
   "工具": "tool",
@@ -60,7 +59,6 @@
   "F8 中断": "F8 break",
   "报错": "errors",
   "⏯️ Ctrl+→ 向右选 · → 步进（Shift+→ 含返回步:慢放规则） · F8+下面板双击:断点暂停；": "⏯️ Ctrl+→ select right · → step (Shift+→ includes returns: slow rules) · F8 + double-click below: breakpoint pause;",
-  "Bksp 关键词补齐 · Ctrl+点击 连线到定义 · F12中可用: $1–$4 $5..": "Bksp keyword completion · Ctrl+click links to definition · in F12: $1–$4 $5..",
   "点击修改颜色（保存在本机）": "click to change colors (saved locally)",
   "点击树节点时的工具：1-6 切换，或在上面滚轮切换；双击节点总是 [n] 标记；括号/Tag 只在折叠工具下折叠": "tool used when clicking a tree node: 1-6 switches, or wheel above; double-click always [n] marks; brackets/Tag fold only under the fold tools",
   "步进时折叠 Tsv→Table→Row→Field 这类未吃任何东西的连续进入与连续返回；Shift+→ 仍可逐个查看": "while stepping, fold runs of entries/returns that ate nothing (Tsv→Table→Row→Field); Shift+→ still shows them one by one",
@@ -70,5 +68,7 @@
   "拖动调整上下面板": "drag to resize the panels",
   "编译结果": "compiled",
   "切换：输入的语法树 / 语法编译结果": "toggle: input syntax tree / compiled grammar",
-  "地址栏 #xx.js..名字:~源码": "address bar #xx.js..name:~source"
+  "地址栏 #xx.js..名字:~源码": "address bar #xx.js..name:~source",
+  "G 声明": "G decl",
+  "Bksp 关键词补齐 · 悬停连线·点引用跳定义·点声明反查 · F12中可用: $1–$4 $5..": "Bksp keyword completion · hover links, click a use to jump, click a decl to list uses · in F12: $1–$4 $5.."
 }
