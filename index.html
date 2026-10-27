@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>parviz — 递归下降可视化</title>
+<style>
+:root{--B:#61afef;--Y:#e5c07b;--G:#98c379;--R:#e06c75;--P:#c678dd;--bg:#1e2127;--bg2:#252932;--fg:#d7dae0;--mut:#7f8794;--bd:#3a3f4b}
+*{box-sizing:border-box}
+header{display:flex;gap:14px;align-items:center;padding:4px 10px;border-bottom:1px solid var(--bd);color:var(--mut);font-size:12px;flex-wrap:wrap}
+body{margin:0;height:100vh;display:flex;flex-direction:column;background:var(--bg);color:var(--fg);font:13px/1.55 ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;font-variant-ligatures:none}
+header b{color:var(--fg)}
+.lg span{padding:0 4px}
+pre{margin:0}
+.ed{outline:none;white-space:pre-wrap;word-break:break-all;overflow:auto;padding:8px 10px;tab-size:4;caret-color:#fff}
+#src{height:32vh;border-bottom:1px solid var(--bd);font-size:14px}
+body.stepping #src{caret-color:transparent;background:#1b1e24}
+#bar{display:flex;gap:6px;align-items:center;padding:4px 10px;border-bottom:1px solid var(--bd);background:var(--bg2);flex-wrap:wrap}
+button,select{background:#2f3440;color:var(--fg);border:1px solid var(--bd);border-radius:3px;font:inherit;padding:1px 8px;cursor:pointer}
+button:hover{border-color:var(--B)}
+#status{color:var(--mut);margin-left:auto}
+#out{max-height:18vh;overflow:auto;padding:4px 10px;border-bottom:1px solid var(--bd);white-space:pre-wrap;font-size:12px}
+#out .eitem{display:block;color:var(--R);cursor:pointer}
+#out .eitem:hover{background:#3a2a2e}
+#out .val{color:var(--fg)} #out .log{color:var(--G)} #out .warn{color:var(--Y)} #out .ed-log{color:var(--mut)}
+#main{flex:1;display:flex;min-height:0}
+#tree{flex:0 0 80%;overflow:auto;padding:8px 12px;border-right:1px solid var(--bd)}
+#side{flex:0 0 20%;display:flex;flex-direction:column;min-width:0}
+#side .hd{display:flex;gap:4px;padding:4px;border-bottom:1px solid var(--bd)}
+#side select{flex:1;min-width:0}
+#rules{flex:1;font-size:12px;white-space:pre;word-break:normal}
+#rerr{max-height:20%;overflow:auto;color:var(--R);font-size:11px;padding:2px 6px}
+#rerr div{cursor:pointer}
+/* 颜色表：BYGRP，CSS.highlights 与树视图共用 */
+.B{color:var(--B)}.Y{color:var(--Y)}.G{color:var(--G)}.P{color:var(--P)}
+.R{color:var(--R)}.err{text-decoration:underline wavy var(--R);text-decoration-skip-ink:none}
+::highlight(B){color:#61afef}::highlight(Y){color:#e5c07b}::highlight(G){color:#98c379}::highlight(P){color:#c678dd}
+::highlight(R){text-decoration:underline wavy #e06c75;text-decoration-skip-ink:none}
+::highlight(hov){background-color:rgba(97,175,239,.28)}
+::highlight(step){background-color:rgba(97,175,239,.22)}
+::highlight(stepY){background-color:rgba(229,192,123,.38)}
+::highlight(eat){background-color:rgba(152,195,121,.42)}
+::highlight(ev){background-color:rgba(198,120,221,.32)}
+/* 语法树 [123 s[exp] "r"] */
+.tree{white-space:normal}
+.nd{border-radius:2px;cursor:pointer}
+.nd:hover,.nd.hot{background:rgba(97,175,239,.18)}
+.nd.pin{outline:1px solid var(--B)}
+.box>.br{color:var(--mut)}
+.box>.br.nm{color:#abb2bf}
+.box.fold>.kids{display:none}
+.box.fold>.br.nm::after{content:"…";color:var(--B)}
+.box.blk>.kids{display:block;padding-left:1.3em;border-left:1px dotted var(--bd);margin-left:.3em}
+.box.blk>.kids>*{display:block}
+.box:not(.blk)>.kids>*+*{margin-left:.6ch}
+.par{color:var(--mut);font-size:11px}
+.par.fold>.pv{display:none}
+.par.fold::after{content:"…]"}
+.par:not(.fold)::after{content:"]"}
+.par [data-pos]{color:var(--Y);cursor:pointer}
+.more{color:var(--mut)}
+/* 全屏 sloc 层 */
+#ov{position:fixed;inset:0;pointer-events:none;z-index:20}
+#ov svg{position:absolute;inset:0;width:100%;height:100%}
+#ov path{fill:none;stroke:var(--B);stroke-width:1.4;stroke-dasharray:4 3}
+#ov path.e{stroke:var(--R)}
+.mk{position:fixed;pointer-events:auto;font-size:9px;line-height:1;padding:0 2px;border-radius:2px;background:#2b3a55;color:var(--B);cursor:pointer;transform:translateY(-100%);white-space:nowrap}
+.mk.e{background:#4a2a2e;color:var(--R)}
+#caret{position:fixed;width:2px;background:#fff;z-index:21;pointer-events:none;animation:bl 1s steps(2) infinite}
+@keyframes bl{50%{opacity:.2}}
+#menu{position:fixed;z-index:22;min-width:220px;max-width:60vw;max-height:40vh;overflow:auto;background:#2a2f3a;border:1px solid var(--bd);border-radius:4px;box-shadow:0 6px 18px #0008;font-size:12px;padding:3px 0}
+#menu .hd{padding:2px 8px;color:var(--mut);border-bottom:1px solid var(--bd)}
+#menu .hd b{color:var(--fg)}
+#menu .fr{padding:0 8px;display:flex;gap:12px;justify-content:space-between}
+#menu .fr.top{background:#344158}
+#menu .fr.tok{color:var(--Y)}
+#menu .fr .sl{color:var(--mut)}
+#menu .tree{padding:3px 8px}
+#menu.y{border-color:var(--Y)}
+</style>
+</head>
+<body>
+<header>
+  <b>parviz</b><span>递归下降可视化 · 组合子 + 元语言</span>
+  <span class="lg"><span class="B">B 数字</span><span class="Y">Y 字符串</span><span class="G">G 函数名</span><span class="R err">R 错误</span><span class="P">P 参数</span></span>
+  <span>Ctrl+Enter 解析 · Alt+→ 从光标处步进（→ 前进 ← 回溯 Shift 跳过子规则 Esc 退出）· Ctrl+点击 跳到定义 · 点击树节点钉 [n] 标记 · F8 逐步执行</span>
+</header>
+<pre id="src" class="ed"></pre>
+<div id="bar">
+  <button id="bParse" title="Ctrl+Enter">解析</button>
+  <button id="bStep" title="Alt+→">步进</button>
+  <button id="bRun">执行</button>
+  <button id="bEval" title="F8">逐步执行</button>
+  <span id="status"></span>
+</div>
+<div id="out"></div>
+<div id="main">
+  <div id="tree" class="tree"></div>
+  <aside id="side">
+    <div class="hd"><select id="ex"></select><button id="bCompile" title="Ctrl+Enter">编译</button></div>
+    <pre id="rules" class="ed"></pre>
+    <div id="rerr"></div>
+  </aside>
+</div>
+<div id="ov"><svg></svg><div id="mks"></div></div>
+<div id="caret" hidden></div>
+<div id="menu" hidden></div>
+<script src="parse.js"></script>
+<script src="lisp.js"></script>
+<script src="ui.js"></script>
+</body>
+</html>
