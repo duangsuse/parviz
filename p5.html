@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>parviz · p5 — Lisp 写 p5.js</title>
+<style>
+:root{--B:#61afef;--Y:#e5c07b;--G:#98c379;--R:#e06c75;--P:#c678dd;--bg:#1e2127;--bg2:#252932;--fg:#d7dae0;--mut:#7f8794;--bd:#3a3f4b}
+*{box-sizing:border-box}
+body{margin:0;height:100vh;display:flex;flex-direction:column;background:var(--bg);color:var(--fg);font:13px/1.55 ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;font-variant-ligatures:none}
+a{color:var(--B);text-decoration:none}
+header{display:flex;gap:10px;align-items:center;padding:4px 10px;border-bottom:1px solid var(--bd);color:var(--mut);font-size:12px;flex-wrap:wrap}
+header b{color:var(--fg)}
+button,select{background:#2f3440;color:var(--fg);border:1px solid var(--bd);border-radius:3px;font:inherit;padding:1px 8px;cursor:pointer}
+button:hover,select:hover{border-color:var(--B)}
+#play{color:var(--G)} #stop{color:var(--R)} #resume{color:var(--Y);border-color:var(--Y)}
+#status{margin-left:auto}
+main{flex:1;display:flex;min-height:0}
+#left{flex:0 0 52%;display:flex;flex-direction:column;min-width:0;border-right:1px solid var(--bd)}
+#right{flex:1;display:flex;flex-direction:column;min-width:0}
+.tab{padding:2px 12px;background:var(--bg2);border-bottom:1px solid var(--bd);color:var(--mut);font-size:12px}
+.tab b{color:var(--fg);font-weight:normal;border-bottom:2px solid var(--B)}
+pre{margin:0}
+.ed{outline:none;white-space:pre-wrap;word-break:break-all;overflow:auto;padding:8px 10px;tab-size:2;caret-color:#fff}
+.ed::after{content:'\200b'}
+#src{flex:1;min-height:80px;font-size:14px}
+#split{height:5px;cursor:row-resize;background:var(--bd);flex:none}
+#split:hover,#split.drag{background:var(--B)}
+#con{flex:0 0 28%;display:flex;flex-direction:column;min-height:60px}
+#con .hd{display:flex;align-items:center;gap:8px;padding:1px 10px;background:var(--bg2);border-bottom:1px solid var(--bd);color:var(--mut);font-size:12px}
+#con .hd button{margin-left:auto;padding:0 6px}
+#out{flex:1;overflow:auto;padding:4px 10px;white-space:pre-wrap;word-break:break-all;font-size:12px}
+#out .log{color:var(--fg)} #out .info{color:var(--B)} #out .warn{color:var(--Y)} #out .cm{color:var(--mut)}
+#out .eitem,#out .error{display:block;color:var(--R)}
+#out .eitem{cursor:pointer} #out .eitem:hover{background:#3a2a2e}
+#out .pause{color:var(--Y);cursor:pointer} #out .pause:hover{background:#3a3524}
+#pv{flex:1;display:flex;align-items:center;justify-content:center;overflow:auto;background:#14161b;padding:8px}
+#pv canvas{box-shadow:0 2px 14px #0009}
+.B{color:var(--B)}.Y{color:var(--Y)}.G{color:var(--G)}.P{color:var(--P)}.R{color:var(--R)}
+::highlight(ev){background-color:rgba(229,192,123,.35)}
+::highlight(bp){background-color:rgba(224,108,117,.30);text-decoration:underline dotted var(--R)}
+::highlight(tw-pos){background-color:rgba(198,120,221,.16);text-decoration:underline dotted var(--P)}
+#tw{position:fixed;z-index:60;display:none;background:var(--bg2);border:1px solid var(--bd);border-radius:6px;padding:6px;box-shadow:0 6px 24px #000a;font-size:12px;color:var(--mut)}
+#tw canvas{display:block;cursor:crosshair;border-radius:3px}
+#tw .row{display:flex;align-items:center;gap:8px;color:var(--fg)}
+#tw input[type=color]{width:64px;height:30px;padding:0;border:1px solid var(--bd);border-radius:3px;background:none;cursor:pointer}
+#tw div:not(.row){margin-top:4px}
+@media (max-width:900px){main{flex-direction:column}#left{flex:1 1 55%;border-right:0}}
+</style>
+<style id="hlc"></style>
+<style id="twst"></style>
+</head>
+<body>
+<header>
+  <b>parviz · p5</b> <a href="./index.html" title="回到递归下降调试器">debugger</a>
+  <button id="play" title="运行（Ctrl+Enter）：toplevel 语句 = setup，tick / do 注册每帧函数">▶ 运行</button>
+  <button id="stop" title="停止（Ctrl+Shift+Enter）">■ 停止</button>
+  <button id="resume" title="断点处继续（F8）" hidden>⏯ 继续</button>
+  <label title="编辑后自动重新运行"><input type="checkbox" id="auto"> 自动刷新</label>
+  <select id="ex" title="内置示例"></select>
+  <span title="双击源码里的函数名切换断点；函数每次返回时在这里暂停，F8 继续（含 JS 函数名如 circle / log）">双击函数名：断点 · F8 继续 · Ctrl+Enter 运行</span>
+  <span id="status"></span>
+</header>
+<main>
+  <section id="left">
+    <div class="tab"><b>sketch.lisp</b></div>
+    <pre id="src" class="ed"></pre>
+    <div id="split" title="拖动调整编辑器 / 控制台"></div>
+    <div id="con"><div class="hd">Console <button id="clr">清空</button></div><div id="out"></div></div>
+  </section>
+  <section id="right">
+    <div class="tab"><b>Preview</b></div>
+    <div id="pv"></div>
+  </section>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/p5@1.9.4/lib/p5.min.js"></script>
+<script src="parse.js"></script>
+<script src="lisp.js"></script>
+<script src="editor.js"></script>
+<script src="p5ex.js"></script>
+<script src="p5tweak.js"></script>
+<script src="p5ui.js"></script>
+</body>
+</html>

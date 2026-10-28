@@ -46,7 +46,7 @@ const infix = n => {
 const ARITH = { '+': (a, b) => a + b, '-': (a, b) => a - b, '*': (a, b) => a * b, '/': (a, b) => a / b }
 
 /* ======================= ① 语法 =======================
-   Lisp 特有的语法糖：a.(f b) / a.k 链、(c)? A Or B、语句级 (a) b 即 ((a) b)、(> 2x + 3y) 内联中缀。其余（lambda、定义、def 写法）都在规则里用工具包组合。 */
+   Lisp 特有的语法糖：a.(f b) / a.k 链、(c)? A Or B、语句级 (a) b 即 ((a) b)、(> 2x + 3y) / [> a <= b] 内联中缀（只有头是 > 的括号里才有中缀）。其余（lambda、定义、def 写法）都在规则里用工具包组合。 */
 const funcs = {
   infix: (v, n) => infix(n),
   // [函数, [实参...]] → ["()", ["()", 函数, 实参1], 实参2]…（单参 lambda 的柯里化调用）；树里显示为 [() [() f a] b]
@@ -69,6 +69,7 @@ const funcs = {
   if: (v, n) => { if (v[1] === undefined) return v[0]; const pn = parts(n); return T('?', [v[0], ...v[1]], n, [pn[0], ...parts(pn[1])]) },
   // 字符串字面量 → ["", 文本]；Dkey 是 o.k 的裸键（bare），语句级 o.k args 时改成名字
   strlit: (v, n) => leaf('', v, n),
+  lit: (v, n) => leaf('', v, n),   // #66ccff / ./a.wtf：字符串字面量（原样文本）
   dkey: (v, n) => Object.assign(leaf('', v, n), { bare: true }),
   // 2x → (* 2 x)
   lmono: ([k, name], n) => { const pn = parts(n); return T('()', [ref('*', pn[0]), k, name], n, [pn[0], pn[0], pn[1]]) },
@@ -88,45 +89,53 @@ const funcs = {
   lsame: (v, n, ss) => { let j = n.a; while (j > 0 && ' \t,'.includes(ss.src[j - 1])) j--; const c = ss.src[j - 1]; return c == '\n' || c == ';' ? FAIL : v },
   // ":" 语句... "..." → 语句数组（带每条语句的 CST 节点 ns），defn 把它展开成 lambda 体
   lblock: (v, n) => { const a = v === undefined ? [] : Array.isArray(v) && !isT(v) ? v : [v]; a.ns = parts(parts(n)[0]); return a },
-  // (f a b)；当 f 是运算符名（+ * / % > < >= <= == !=）时实参里的 + - * / % 是中缀：(> 2x + 3y) → (> (+ (* 2 x) (* 3 y)))
+  // (f a b) 普通调用；头是 > 时是“内联中缀”（唯一有中缀的地方）：(> 2x + 3y) 是多项式的值，(> a <= b) 是比较。见 calc
   lcall: (v, n) => {
-    const a = Array.isArray(v) && !isT(v) ? T('()', v, n, parts(n)) : T('()', v === undefined ? [] : [v], n, [n]), h = a[1]
-    if (!(isT(h) && h[0] == '$' && OPHEAD.has(h[1]))) return a
-    const isOp = (x, i) => i >= 3 && i < a.length - 1 && isT(x) && x[0] == '$' && Object.hasOwn(PREC, x[1])
-    if (!a.some(isOp)) return a
-    const bin = (o, l, r) => {
-      const minus = o.t[1] == '-'
-      const rv = minus ? T('()', [ref('neg', o.nd), r.v], n, [o.nd, r.nd], false) : r.v
-      return { v: T('()', [minus ? ref('+', o.nd) : o.t, l.v, rv], n, [o.nd, l.nd, r.nd], false), nd: n }
-    }
-    const out = [h], ons = [a.ns[0]]
-    for (let i = 2; i < a.length; i++) {
-      const vals = [{ v: a[i], nd: a.ns[i - 1] }], os = []
-      const red = () => { const r = vals.pop(), l = vals.pop(); vals.push(bin(os.pop(), l, r)) }
-      while (i + 2 < a.length && isOp(a[i + 1], i + 1)) {
-        const o = { t: a[i + 1], nd: a.ns[i] }; n.free &&= n.free.filter(r => r.node !== o.t.node)   // 中缀运算符不是名字引用
-        while (os.length && PREC[os.at(-1).t[1]] >= PREC[o.t[1]]) red()
-        os.push(o); vals.push({ v: a[i + 2], nd: a.ns[i + 1] }); i += 2
-      }
-      while (os.length) red()
-      out.push(vals[0].v); ons.push(vals[0].nd)
-    }
-    return T('()', out, n, ons)
+    const a = Array.isArray(v) && !isT(v) ? T('()', v, n, parts(n)) : T('()', v === undefined ? [] : [v], n, [n])
+    return a[1]?.[0] == '$' && a[1][1] == '>' ? calc(a, n) : a
   },
+  // [> a <= b] 同样是内联中缀（表达式位置也不会被当成数组）；其余 [..] 原样
+  lbrk: (v, n) => v[1]?.[0] == '$' && v[1][1] == '>' ? calc(v, n) : v,
 }
 Object.assign(P.funcs, funcs)
 
-const PREC = { '+': 1, '-': 1, '*': 2, '/': 2, '%': 2 }
-const OPHEAD = new Set(['+', '*', '/', '%', '>', '<', '>=', '<=', '==', '!='])
+/* (> 项 运算符 项 运算符 项 …)：头 > 是语法，不是比较函数。里面必须是“项 运算符 项 …”交替，优先级 比较 < + - < * / %，同级左结合；
+   减法编译成加负数。结果直接是脱糖后的调用树：(> 2x + 3y <= 7) → (<= (+ (* 2 x) (* 3 y)) 7)；只有一项时就是那一项。 */
+const PREC = { '<': 1, '<=': 1, '>': 1, '>=': 1, '==': 1, '!=': 1, '+': 2, '-': 2, '*': 3, '/': 3, '%': 3 }
+function calc(a, n) {
+  const k = a.length - 2, isOp = x => isT(x) && x[0] == '$' && Object.hasOwn(PREC, x[1])
+  let ok = k % 2 == 1; for (let i = 0; ok && i < k; i++) if (isOp(a[i + 2]) != (i % 2 == 1)) ok = false
+  if (!ok) { n.err = tr`(> …) 里应是“项 运算符 项 …”交替，运算符是 + - * / % < <= > >= == !=`; return a }
+  const ops = new Set(a.slice(2).filter(isOp).map(o => o.node)); ops.add(a[1].node)
+  n.free &&= n.free.filter(r => !ops.has(r.node))                  // 头 > 和运算符是语法，不是名字引用
+  const bin = (o, l, r) => {
+    const minus = o.t[1] == '-'
+    const rv = minus ? T('()', [ref('neg', o.nd), r.v], n, [o.nd, r.nd], false) : r.v
+    return { v: T('()', [minus ? ref('+', o.nd) : o.t, l.v, rv], n, [o.nd, l.nd, r.nd], false), nd: n }
+  }
+  const vals = [{ v: a[2], nd: a.ns[1] }], os = []
+  const red = () => { const r = vals.pop(), l = vals.pop(); vals.push(bin(os.pop(), l, r)) }
+  for (let i = 3; i < a.length; i += 2) {
+    const o = { t: a[i], nd: a.ns[i - 1] }
+    while (os.length && PREC[os.at(-1).t[1]] >= PREC[o.t[1]]) red()
+    os.push(o); vals.push({ v: a[i + 1], nd: a.ns[i] })
+  }
+  while (os.length) red()
+  const r = vals[0].v; if (isT(r)) n.view = viewOf(r)
+  return r
+}
 const SYM = '[^\\s()\\[\\]{}",;?.]'
 const STR = '"(\\\\.|[^"\\\\])*"'
+const END = '(?![^\\s()\\[\\]{}",;?])'                                   // 字面量必须在分隔符处结束
+const HEXB = `(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})${END}`, HEX = '#' + HEXB   // #rgb #rgba #rrggbb #rrggbbaa：不再当注释
 const RULES = `# Lisp —— 作用域由 Lexscope 工具包组合：:arg2nth 参数表、:fn 闭合 lambda、:let 定义、:set 赋值、:defn 两者合一、:ref 引用、:global 顶层
 # (=> (a b) e)、[- f (=> (a b) e)]、def f(a b) e 产生完全相同的 AST（"=" 定义，不可被 -> 改变）；[-> x e] 是局部赋值（无则初始化）
 # (条件)? A Or B 是 if；OK 是普通内建（流控返回）；表达式位置的 [] {} 是数组/KV，语句位置的 [] 是调用
-# 同一行里语句级的 (a) b 是 ((a) b)，换行或 ; 结束语句；a.k 取对象的键，(> 2x + 3y) 的运算符之间是中缀
-# 注释：# 到行尾，#@ … @# 可跨行；; 是语句分隔符（在表达式里与空白等价）
-@skip /(?:[\\s,;]|#@[\\s\\S]*?@#|#[^\\n]*)+/
-@color Num=B Coef=B Str=Y Qs=Y
+# 同一行里语句级的 (a) b 是 ((a) b)，换行或 ; 结束语句；a.k 取对象的键；(> 2x + 3y <= 9) / [> a == b]? 是唯一有中缀的地方（头必须是 >）
+# 注释：# 到行尾（但 #66ccff 这样的十六进制颜色是字面量），#@ … @# 可跨行；; 是语句分隔符（在表达式里与空白等价）
+# 字面量（都是字符串）：#66ccff 颜色、./a/b.wtf 与 ../x 路径
+@skip /(?:[\\s,;]|#@[\\s\\S]*?@#|#(?!${HEXB})[^\\n]*)+/
+@color Num=B Coef=B Str=Y Qs=Y Lit=Y
 @walk lisp
 Lisp   (Stmt *) :global :tag("..")
 Stmt   Exp (Same *) :lstmt
@@ -134,7 +143,7 @@ Same   Exp :lsame
 Exp    ((Chain ("?" Recur "Or" Recur ?) :if) :setRecur)
 Chain  Atom (Dot *) :chain
 Dot    "." (List Brk Str Dkey <)
-Atom   (Mono Num Str Lam Let Set Defn List Brk Obj Name <)
+Atom   (Mono Num Str Lit Lam Let Set Defn List Brk Obj Name <)
 Lam    ((/\\((?=\\s*=>)/ "=>" Params (Recur *) ")" :par) (/\\[(?=\\s*=>)/ "=>" Params (Recur *) "]" :par) <) :fn
 Let    ((/\\((?=\\s*-\\s+${SYM}+\\s)/ "-" Var Recur ")" :par) (/\\[(?=\\s*-\\s+${SYM}+\\s)/ "-" Var Recur "]" :par) <) :let
 Set    ((/\\((?=\\s*->\\s+${SYM}+\\s)/ "->" Var Recur ")" :par) (/\\[(?=\\s*->\\s+${SYM}+\\s)/ "->" Var Recur "]" :par) <) :set
@@ -142,12 +151,13 @@ Defn   "def" Var Params (Block Recur <) :defn
 Block  ":" (Stmt *) "..." :lblock
 Params (("(" (Pname *) ")" :par) ("[" (Pname *) "]" :par) <) :arg2nth
 List   ("(" (Recur *) ")" :par :lcall)
-Brk    ("[" (Recur *) "]" :par :tag("[]"))
+Brk    ("[" (Recur *) "]" :par :tag("[]") :lbrk)
 Obj    ("{" (Pair *) "}" :par :tag("{}"))
 Pair   (Qs Key <) Recur
 Key    /${SYM}+/
-Dkey   /${SYM}+/ :dkey
+Dkey   /(?![/])${SYM}+/ :dkey
 Num    /-?\\d+(\\.\\d+)?/ :num
+Lit    /(?:${HEX}|[.]{1,2}[/][^\\s()\\[\\]{}",;?]+)/ :lit
 Mono   Coef Name :lmono
 Coef   /-?\\d+(\\.\\d+)?(?=[^\\s()\\[\\]{}",;?.\\d])/ :num
 Qs     /${STR}/ :str
@@ -163,11 +173,12 @@ const NO = Object.freeze({ toString: () => 'NO' })
 class Ret { constructor(v) { this.v = v } }          // OK 抛出的流控返回
 class LispErr extends Error { constructor(m, x) { super(m); this.x = x } }
 const truthy = v => v !== NO && v !== false && v != null
-const fname = f => f?.t == 'fn' ? f.name || 'λ' : f?.bname || '?'
+const fname = f => f?.t == 'fn' ? f.name || 'λ' : f?.bname || f?.name || '?'
+const isPlain = v => { const p = Object.getPrototypeOf(v); return p === Object.prototype || p === null }
 const show = (v, d = 0) => v === NO ? 'NO' : typeof v == 'string' ? (d ? JSON.stringify(v) : v)
-  : Array.isArray(v) ? '[' + v.map(x => show(x, 1)).join(' ') + ']'
-  : v && v.t == 'fn' ? `<fn ${fname(v)}/${v.params.length}>` : typeof v == 'function' ? `<builtin ${v.bname || ''}>`
-  : v && typeof v == 'object' ? '{' + Object.entries(v).map(([k, x]) => k + ' ' + show(x, 1)).join(' ') + '}' : String(v)
+  : Array.isArray(v) ? (d > 6 ? '[…]' : '[' + v.map(x => show(x, d + 1)).join(' ') + ']')
+  : v && v.t == 'fn' ? `<fn ${fname(v)}/${v.params.length}>` : typeof v == 'function' ? (v.lisp ? show(v.lisp) : `<builtin ${fname(v)}>`)
+  : v && typeof v == 'object' ? (!isPlain(v) ? `<${v.constructor?.name || 'object'}>` : d > 6 ? '{…}' : '{' + Object.entries(v).map(([k, x]) => k + ' ' + show(x, d + 1)).join(' ') + '}') : String(v)
 
 class Env {
   constructor(p) { this.m = new Map; this.p = p }
@@ -177,15 +188,14 @@ class Env {
 // 内建：普通函数直接调用；gen 标记的是生成器（会回调 lambda，逐步执行能进到里面）
 const gen = f => (f.gen = 1, f)
 const eq = (a, b) => a === b || JSON.stringify(a) === JSON.stringify(b)
-const cmp = f => (...a) => a.length < 2 ? f(a[0], 0) : f(a[0], a[1])   // 单参比较与 0 比：(> 2x + 3y) 即 2x+3y > 0
 const B = {
   '+': (...a) => a.reduce((x, y) => x + y), neg: a => -a,
   '*': (...a) => a.reduce((x, y) => x * y, 1), '/': (a, b) => a / b, '%': (a, b) => a % b,
-  '>': cmp((a, b) => a > b), '<': cmp((a, b) => a < b), '>=': cmp((a, b) => a >= b), '<=': cmp((a, b) => a <= b),
+  '>': (a, b) => a > b, '<': (a, b) => a < b, '>=': (a, b) => a >= b, '<=': (a, b) => a <= b,   // (> a > b) 等中缀脱糖成这些二元调用
   '==': eq, '!=': (a, b) => !eq(a, b), isnt: a => !truthy(a), both: (a, b) => truthy(a) ? b : a,
-  '->': (o, k, v) => v === undefined ? { ...o, ...k } : { ...o, [k]: v },   // (-> any {…}) / any.[-> "k" v]：返回合并后的新对象（名字 + 对象字面量由 Walk['->'] 做部分赋值）
+  '->': (o, k, v) => { const p = v === undefined ? k : { [k]: v }; return Object.assign(o, isPlain(o) ? p : Object.fromEntries(Object.entries(p).map(([a, b]) => [a, toJS(b)]))) },   // o.[-> {…}] / o.[-> "k" v]：原地合并并返回 o（JS 对象上的 Lisp 函数转成回调）；名字 + 对象字面量由 Walk['->'] 做局部部分赋值
   at: (a, i) => { const r = a?.at?.(i); return r === undefined ? NO : r },
-  get: (o, k) => o?.[k] ?? NO, len: a => a.length, keys: o => Object.keys(o), list: (...a) => a,
+  get: (o, k) => { const v = o?.[k]; return v === undefined ? NO : bindTo(v, o) }, len: a => a.length, keys: o => Object.keys(o), list: (...a) => a,
   str: (...a) => a.map(x => show(x)).join(''), concat: (...a) => [].concat(...a), push: (a, ...x) => [...a, ...x],
   range: (a, b) => { if (b == null) [a, b] = [0, a]; const r = []; for (let i = a; i < b; i++) r.push(i); return r },
   sum: a => a.reduce((x, y) => x + y, 0),
@@ -194,8 +204,12 @@ const B = {
   filter: gen(function* (a, f) { const r = []; for (const x of a) if (truthy(yield* call(f, [x]))) r.push(x); return r }),
   mapNotNO: gen(function* (a, f) { const r = []; for (const x of a) { const y = yield* call(f, [x]); if (y !== NO) r.push(y) } return r }),
   reduce: gen(function* (a, f, z) { for (const x of a) z = yield* call(f, [z, x]); return z }),
+  each: gen(function* (a, f) { let i = 0; for (const x of a) yield* call(f, [x, i++]); return a }),
+  new: (C, ...a) => fromJS(new C(...a.map(toJS))),
+  wait: ms => new Promise(r => setTimeout(r, ms)),                         // Promise：调用处自动 await
+  true: true, false: false, null: null,
 }
-for (const k in B) B[k].bname = k
+for (const k in B) if (typeof B[k] == 'function') B[k].bname = k
 Object.setPrototypeOf(B, null)   // 名字如 constructor 不会命中 Object 原型
 
 function* ev(x, env, stmt = false) {
@@ -219,6 +233,7 @@ const glookup = (x, env, scoped) => {
   if (k in B) return B[k]
   if (k == 'NO') return NO
   if (!scoped) { const e = env.find(k); if (e) return e.m.get(k) }
+  const h = L.host; if (h?.has(k)) return fromJS(h.get(k))      // 宿主（JS 全局 / p5 实例…）
   throw new LispErr(tr`未定义 ${k}`, x)
 }
 const evAll = function* (xs, env) { const r = []; for (const y of xs) r.push(yield* ev(y, env)); return r }
@@ -271,12 +286,30 @@ function* apply(items, env, pre, x) {
   for (const y of items.slice(1)) args.push(yield* ev(y, env))
   return yield* call(f, args, x)
 }
+// Lisp 值 ⇄ JS 值：NO↔undefined；Lisp 函数交给 JS 时包成回调（同一函数同一包装，可 removeEventListener）
+// JS 方法取出来再调用要保住 this：绑到所属对象；Lisp 内建/回调包装原样，大写开头的构造函数不绑（静态成员如 Promise.resolve 会丢）
+const bindTo = (v, o) => typeof v == 'function' && !v.bname && !v.lisp && !/^[A-Z]/.test(v.name) ? v.bind(o) : v
+const toJS = v => v === NO ? undefined : v && v.t == 'fn' ? (v.js ||= ((h) => Object.defineProperties((...a) => callback(v, a.map(fromJS), h), { lisp: { value: v }, toString: { value: () => show(v) } }))(L.host)) : v
+const fromJS = v => v === undefined ? NO : v
+const thenable = v => v && typeof v.then == 'function'
 function* call(f, args, x) {
   let v
   if (f && f.t == 'fn') {
     const e = new Env(f.env); f.params.forEach((p, i) => e.m.set(p, i < args.length ? args[i] : NO))
-    v = yield* body(f.body, e, f.node)
-  } else if (typeof f == 'function') v = f.gen ? yield* f(...args) : f(...args)
+    v = yield* body(f.body, e, f.node, L.host?.last)
+  } else if (typeof f == 'function') {
+    if (f.lisp) return yield* call(f.lisp, args, x)                      // 交给过 JS 的回调又回到 Lisp：还原
+    if (f.gen) v = yield* f(...args)
+    else if (f.bname) { try { v = f(...args) } catch (e) { if ((e instanceof TypeError || e instanceof RangeError) && !e.x) e.x = x; throw e } }   // 内建的参数错误也指到调用处
+    else {                                                               // 外部 JS 函数：参数转 JS、异常归到调用节点
+      try { v = f(...args.map(toJS)) } catch (e) { if (e instanceof Ret || e instanceof LispErr) throw e; throw new LispErr(e?.message ?? String(e), x) }
+      v = fromJS(v)
+    }
+    if (thenable(v)) {                                                   // 自动 await：驱动器回送 {v} / {err}；同步驱动器不回送，原样返回 Promise
+      const s = yield { x, n: x?.node, ph: 'await', p: v }
+      if (s) { if (s.err !== undefined) throw new LispErr(s.err?.message ?? String(s.err), x); v = fromJS(s.v) }
+    }
+  }
   else throw new LispErr(tr`${show(f, 1)} 不可调用`, x)
   yield { x, n: x?.node || (f.t == 'fn' ? f.node : null), ph: 'ret', f, args, v }
   return v
@@ -295,25 +328,64 @@ function* body(items, env, n, last) {
 
 /* ---- 驱动 ---- */
 let LOG = null
-const warn = (m, n) => LOG && LOG.push({ warn: m, n })
+const warn = (m, n) => (LOG || L.host?.log)?.push({ warn: m, n })
 const globals = log => { const e = new Env(null); e.m.set('w@', Object.assign((...a) => { log.push({ out: a.map(x => show(x)).join(' ') }); return a.at(-1) ?? NO }, { bname: 'w@' })); return e }
 const isDef = s => isT(s) && (s[0] == '=' || s[0] == '->')
 // 逐步执行：迭代器产出上述事件；结束时 done.value = {value} | {err, x}，均带 log。
 // prog 是根 ["..", 语句...]；ast 不是根时（独立求值）先执行顶层定义再单独求值 ast
-function* steps(ast, prog = ast, last = false) {
-  const log = []; LOG = log
+function* steps(ast, prog = ast, last = false, log = []) {
+  LOG = log
   try {
     const env = globals(log), stmts = prog.slice(1)
     if (ast === prog) return { value: yield* body(stmts, env, prog.node, last), log }
     for (const s of stmts) if (isDef(s) && s !== ast) try { yield* ev(s, env, true) } catch (e) { if (!(e instanceof LispErr)) throw e }
     return { value: yield* ev(ast, env, stmts.includes(ast)), log }
   }
-  catch (e) { if (e instanceof Ret) return { value: e.v, log }; if (e instanceof LispErr || e instanceof RangeError || e instanceof TypeError) return { err: e.message, x: e.x, log }; throw e }
+  catch (e) { return { ...fail(e), log } }
   finally { LOG = null }
 }
 const drive = (it, max = 300000) => { let r, n = 0; while (!(r = it.next()).done) if (++n > max) return { err: tr`超过 ${max} 步，已中止`, log: [] }; return { ...r.value, steps: n } }
 const run = prog => drive(steps(prog))
 const node = (ast, prog) => drive(steps(ast, prog))
+const fail = e => {
+  if (e instanceof Ret) return { value: e.v }
+  if (e instanceof LispErr || e instanceof RangeError || e instanceof TypeError) return { err: e.message, x: e.x }
+  throw e
+}
+
+/* ---- 脱离调试器独立运行（p5.html 等宿主）----
+   L.host = { has(名), get(名), last?, log?, error?(res), pause?(事件)→Promise, alive?()→bool }：
+     has/get 名字回退（JS 全局、p5 实例…，见 hostOf）；last 为真时函数体取最后一句的值，不要求 OK；
+     pause 在每个事件上被问一次，返回 Promise 就挂起到它兑现（断点）；alive 返回 false 即放弃执行（停止）。 */
+// 驱动生成器：同步一直跑；遇到 await 事件或 pause 返回的 Promise 才转异步。返回结果对象或 Promise<结果对象>
+const exec = (it, h = L.host, max = 3e6) => {
+  const go = send => {
+    for (let n = 0; ; n++) {
+      if (h?.alive && !h.alive()) { try { it.return() } catch { } return { cancelled: true } }
+      const r = it.next(send); send = undefined
+      if (r.done) return r.value
+      const e = r.value, w = e.ph == 'await' ? e.p.then(v => ({ v }), err => ({ err })) : h?.pause?.(e)
+      if (w) return w.then(go)
+      if (n > max) { try { it.return() } catch { } return { err: tr`超过 ${max} 步，已中止` } }
+    }
+  }
+  return go()
+}
+function* runFn(f, args) { try { return { value: yield* call(f, args) } } catch (e) { return fail(e) } }
+// 以 Lisp 函数为入口运行：返回值（或 Promise<值>，函数里 await 过时）；出错交给 h.error(res, tag)，值为 undefined。
+// h 默认当前宿主；交给 JS 的回调固定用创建时的宿主（停止/重跑后旧回调随旧宿主作废）
+const callback = (f, args = [], h = L.host, tag) => {
+  const fin = r => r.err !== undefined ? (h?.error?.(r, tag), undefined) : r.cancelled ? undefined : toJS(r.value)
+  const r = exec(runFn(f, args), h)
+  return r instanceof Promise ? r.then(fin) : fin(r)
+}
+// 以顶层程序为入口运行（语句 = setup）：返回结果对象或 Promise<结果对象>；log 是任何有 push 的接收器（实时输出）
+const start = (prog, log = []) => exec(steps(prog, prog, true, log), L.host)
+// 宿主 = 若干层名字表（先到先得，层可以是返回对象的函数）：has/get；JS 函数绑定到所属对象，Lisp 内建（带 bname）原样
+const hostOf = (...layers) => {
+  const own = n => { for (const l of layers) { const o = typeof l == 'function' ? l() : l; if (o != null && n in Object(o)) return Object(o) } }
+  return { has: n => !!own(n), get: n => { const o = own(n); return bindTo(o[n], o) } }
+}
 const fns = new Set([...Object.keys(B), 'w@'])
 P.walkers.lisp = { run, steps, node, show, fname, builtins: new Set([...fns, 'NO']) }
 // Calc：同一个 walker，程序取最后一句的值
@@ -329,18 +401,18 @@ P.examples.splice(4, 0, {
   name: '四则运算（朴素 Chain）', rules: CHAIN, input: `1 - 2 - 3 + 4 * (5 - 2) / 6`,
 }, {
   name: 'Lisp', rules: RULES, input: `# 语句位置的 [..] 是调用；[e1].[e2] 即 (e1).(e2 ..) 即 [e2 [e1] ..]
-[- big (=> (xs n) xs.(mapNotNO (=> (x) (> x n)? x Or NO)))]
-def fact(n) (<= n 1)? 1 Or (* n (fact (+ n -1)))
+[- big (=> (xs n) xs.(mapNotNO (=> (x) (> x > n)? x Or NO)))]
+def fact(n) (> n <= 1)? 1 Or (> n * (fact (> n - 1)))
 [- inc1 (=> (a) [len a].[+ 1])]
 (- user {name "parviz" langs ["js" "lisp"]})
 (- older user.[-> "age" 40])
 (w@ "fact 5 =" (fact 5) "big:" [3 14 15 9 26].(big 10) user.name older.age (inc1 [1 2 3]))
 def poly(x y):
-  [-> t (> 2x + 3y - 7)]
-  (OK (both t (isnt (== x y))))
+  [-> t (> 2x + 3y > 7)]
+  (OK (both t (> x != y)))
 ...
 (w@ (poly 2 3) (poly 0 1))
-(OK [123].(mapNotNO (=>(x) (> x 10)? x Or NO )).[at 0] )`,
+(OK [123].(mapNotNO (=>(x) (> x > 10)? x Or NO )).[at 0] )`,
 }, {
   name: 'Lisp（作用域/错误）', rules: null, same: 'Lisp', input: `[- k 10]
 [- add (=> (a b) [- s (+ a b)] (OK s.[+ k]))]
@@ -351,7 +423,7 @@ def twice(f x) (f (f x))
 (OK {sum (add 1 2) xs [1 2 (3 ] ok "fine"})`,
 })
 
-const L = { NO, Ret, LispErr, B, Walk, Env, ev, steps, run, node, show, fname, truthy, RULES, CALC, CHAIN, funcs }
+const L = { NO, Ret, LispErr, B, Walk, Env, ev, call, gen, steps, run, node, show, fname, truthy, toJS, fromJS, exec, callback, start, hostOf, host: null, RULES, CALC, CHAIN, funcs }
 if (typeof module != 'undefined') module.exports = L
 G.LISP = L
 })(typeof globalThis != 'undefined' ? globalThis : window)
