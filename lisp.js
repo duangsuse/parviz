@@ -3,7 +3,7 @@
 (function (G) {
 'use strict'
 const P = G.P || require('./parse.js')
-const { T, leaf, leaves, isT, parts, bind, FAIL } = P, tr = P.f   // tr`…`：报错文本走 parse.js 的国际化（这里 f 常作函数名，故换名）
+const { T, leaf, leaves, isT, parts, bind, FAIL, hash4 } = P, tr = P.f   // tr`…`：报错文本走 parse.js 的国际化（这里 f 常作函数名，故换名）
 
 /* ======================= ⓪ 四则运算（两种写法） =======================
    CALC：Exp 的 (Atom (- "+" "-"; "*" "/" -)) 是 parse.js 的 TDOP 算符表（; 分级，越往后越紧，左结合）；
@@ -260,6 +260,89 @@ Name   /(?!Or(?!${SYM}))${SYM}+/ :ref`
    事件只带源码跨度 a/b（值节点自带，见 parse.js 的 T/leaf），不带 CST 节点——显示层换 CST 也不用动这里。
    UI 的 F8 只停在 ret/if/标记处。 */
 const NO = Object.freeze({ toString: () => 'NO' })
+/* ---------- 常量池 ----------
+   数字字面量在值 AST 里是裸 number（树视图 / Tweak 都认它）。要热编辑的程序先过 pool()：复制一份 AST，
+   把每个有源码跨度的数字换成格子 Lit，ev 在非标签分支里解指针（一次 instanceof，不多发事件）。
+   热编辑 = 改格子的值：不重解析、不重跑、不丢状态（闭包里 slice 出来的体也共享同一格子）。
+   锚点 hashline = `行号#hash4(行首至词条末的文本)`，和 ui/app.js 的 onedit 词条哈希同一算法；
+   pool.onedit(hashline, 新文本) 没有第三个参数（有第三个参数的 onedit 是编辑通知）。 */
+class Lit { constructor(v, a, b, fn) { this.v = v; this.a = a; this.b = b; this.fn = fn } }   // fn：在 lambda 体里（会被再次调用）；顶层字面量只在 setup 里读一次
+const NUMRE = /^-?\d+(\.\d+)?$/
+// 同结构的两棵树：把 y 各节点的跨度抄给 x（Lit 格子由调用方单独对齐）
+function respan(x, y, seen) {
+  if (!Array.isArray(x) || !Array.isArray(y) || seen.has(x)) return
+  seen.add(x)
+  if (typeof y.a == 'number') { x.a = y.a; x.b = y.b }
+  for (let i = 0; i < x.length && i < y.length; i++) respan(x[i], y[i], seen)
+}
+function pool(ast, src) {
+  const cells = [], memo = new Map, seen = new Set
+  const cell = (x, nd, fn) => {
+    if (!nd || !(nd.a >= 0) || seen.has(nd.a)) return x
+    const t = src.slice(nd.a, nd.b)
+    if (!NUMRE.test(t) || Number(t) !== x) return x       // 节点与值对不上（语法糖拼出来的）：保持裸值，不可热编辑
+    seen.add(nd.a); const c = new Lit(x, nd.a, nd.b, fn); cells.push(c); return c
+  }
+  const copy = (x, nd, fn) => {
+    if (typeof x == 'number') return cell(x, nd, fn)
+    if (!Array.isArray(x)) return x
+    let c = memo.get(x); if (c) return c
+    const t = isT(x), inner = fn || (t && x[0] == '=>'), ns = x.ns
+    c = new x.constructor(x.length); memo.set(x, c)
+    for (let i = 0; i < x.length; i++) {
+      const k = x[i], n = t && i >= 1 && ns ? ns[i - 1] : null
+      // {} 的键值对是普通数组 [键, 值]；值的节点在这一对的 CST 里
+      c[i] = t && x[0] == '{}' && i >= 1 && Array.isArray(k) && !isT(k) ? (p => [k[0], copy(k[1], p[1], inner)])(parts(n)) : copy(k, n, inner)
+    }
+    for (const k of Object.keys(x)) if (!/^\d+$/.test(k)) c[k] = x[k]   // node / ns / a / b / cs …
+    return c
+  }
+  const code = copy(ast, null, false)
+  cells.sort((p, q) => p.a - q.a)
+  const P_ = {
+    code, cells, src,
+    // 结构签名：数字都当 #，其余照抄；去掉跨度，所以空白 / 注释的变化不改变签名
+    sig() {
+      const w = x => x instanceof Lit ? '#' : Array.isArray(x) ? '[' + x.map(w).join(',') + ']' : typeof x == 'string' ? JSON.stringify(x) : String(x)
+      return w(code)
+    },
+    // 所有格子的锚点（与 cells 同序）
+    anchors() {
+      const s = this.src, ls = [0]; for (let i = 0; i < s.length; i++) if (s.charCodeAt(i) == 10) ls.push(i + 1)
+      return this.cells.map(c => {
+        let lo = 0, hi = ls.length - 1; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (ls[m] <= c.a) lo = m; else hi = m - 1 }
+        return `${lo + 1}#${hash4(s.slice(ls[lo], c.b))}`
+      })
+    },
+    // 热编辑：按锚点找格子，改值并同步影子源码；返回被改的格子，找不到 / 文本不是数字返回 null
+    onedit(h, val) {
+      const t = String(val); if (!NUMRE.test(t)) return null
+      const i = this.anchors().indexOf(h); if (i < 0) return null
+      const c = this.cells[i], ob = c.b, d = t.length - (c.b - c.a)
+      c.v = Number(t); c.b = c.a + t.length
+      this.src = this.src.slice(0, c.a) + t + this.src.slice(ob)
+      for (const k of this.cells) if (k !== c && k.a >= ob) { k.a += d; k.b += d }
+      return c
+    },
+    // 与新解析出的池比较：结构相同（签名一致、格子数一致）→ 返回需要改的 [{cell, text}]，否则 null
+    diff(next) {
+      if (next.cells.length != this.cells.length || next.sig() !== this.sig()) return null
+      const r = []
+      this.cells.forEach((c, i) => { const n = next.cells[i]; if (n.v !== c.v) r.push({ cell: c, text: next.src.slice(n.a, n.b) }) })
+      return r
+    },
+    // 一次编辑（仅数字字面量变化）后：逐格调 onedit（从右往左，左边的锚点不受影响），再把影子源码与跨度对齐到新文本
+    apply(next) {
+      const ch = this.diff(next); if (!ch) return null
+      const as = this.anchors(), done = []
+      for (const e of ch.sort((p, q) => q.cell.a - p.cell.a)) { const c = this.onedit(as[this.cells.indexOf(e.cell)], e.text); if (c) done.push(c) }
+      this.src = next.src; this.cells.forEach((c, i) => { c.a = next.cells[i].a; c.b = next.cells[i].b })
+      respan(code, next.code, new Set)   // 结构相同的两棵树：其余节点的 a/b 也跟着新文本走（控制台 / 暂停 / 取源的跨度不会错位）
+      return done
+    },
+  }
+  return P_
+}
 class Ret { constructor(v) { this.v = v } }          // OK 抛出的流控返回
 class LispErr extends Error { constructor(m, x) { super(m); this.x = x } }
 const truthy = v => v !== NO && v !== false && v != null
@@ -307,7 +390,7 @@ for (const k in B) if (typeof B[k] == 'function') B[k].bname = k
 Object.setPrototypeOf(B, null)   // 名字如 constructor 不会命中 Object 原型
 
 function* ev(x, env, stmt = false) {
-  if (!isT(x)) return x                      // 数字等裸字面量
+  if (!isT(x)) return x instanceof Lit ? x.v : x   // 数字等裸字面量；常量池的格子解指针（见 pool）
   const t = x[0]; let v
   yield { x, a: x.a, b: x.b, ph: 'in' }
   if (t === '$') v = lookup(x, env)          // 最常见的三种节点（名字、全局键、字符串字面）不经 Walk 表与生成器委托
@@ -391,6 +474,19 @@ const bindTo = (v, o) => typeof v == 'function' && !v.bname && !v.lisp && !/^[A-
 const toJS = v => v === NO ? undefined : v && v.t == 'fn' ? (v.js ||= ((h) => Object.defineProperties((...a) => callback(v, a.map(fromJS), h), { lisp: { value: v }, toString: { value: () => show(v) } }))(L.host)) : v
 const fromJS = v => v === undefined ? NO : v
 const thenable = v => v && typeof v.then == 'function'
+// 当前调用栈里最近的 Lisp 函数帧环境；没有就是顶层环境
+const envOf = cx => { for (let i = cx.stack.length - 1; i >= 0; i--) if (cx.stack[i].env) return cx.stack[i].env; return cx.env }
+// 在 env 里即时求值一段已解析的程序（根 [".." 语句…]）；extra 是临时绑定（如 @args / @ret）。
+// 返回 { value } | { value, ret: true }（用了 OK）| { err, a, b }；不触发 pause，所以断点暂停时可以放心调用
+function evalIn(ast, env, extra) {
+  const e = new Env(env); if (extra) for (const k in extra) e.m.set(k, extra[k])
+  const it = (function* () {
+    try { let v = NO; for (const s of ast.slice(1)) v = yield* ev(s, e, true); return { value: v } }
+    catch (x) { if (x instanceof Ret) return { value: x.v, ret: true }; return fail(x) }
+  })()
+  it.cx = newCx(L.host, [])
+  return drive(it)
+}
 function* call(f, args, x) {
   const cx = CX || (CX = newCx(L.host, L.host?.log))
   const fr = { f, x, a: x?.a, b: x?.b }
@@ -400,6 +496,7 @@ function* call(f, args, x) {
     if (f && f.t == 'fn') {
       const e = new Env(f.env), ps = f.params, rest = ps.at(-1) == '..', n = rest ? ps.length - 1 : ps.length
       for (let i = 0; i < n; i++) e.m.set(ps[i], i < args.length ? args[i] : NO)
+      fr.env = e   // 断点暂停时在这一帧里求值
       if (rest) { const r = args.slice(n); e.m.set('..', r); e.m.set('xargs', Object.assign(() => r, { bname: 'xargs' })) }   // .. 参数收集多出来的实参；(xargs) 返回它们
       v = yield* body(f.body, e, f, L.host?.last)
     } else if (typeof f == 'function') {
@@ -417,7 +514,10 @@ function* call(f, args, x) {
     }
     else throw new LispErr(tr`${show(f, 1)} 不可调用`, x)
     if (cx.hooks && cx.hooks.ext) cx.hooks.ext({ cx, f, x, a: fr.a, b: fr.b, args, v })   // pick 模式：默认 null，运行时只剩一次属性读
-    yield { x, a: x ? x.a : (f.t == 'fn' ? f.a : undefined), b: x ? x.b : (f.t == 'fn' ? f.b : undefined), ph: 'ret', f, args, v }
+    const ret = { x, a: x ? x.a : (f.t == 'fn' ? f.a : undefined), b: x ? x.b : (f.t == 'fn' ? f.b : undefined), ph: 'ret', f, args, v }
+    Object.defineProperty(ret, 'env', { value: fr.env || envOf(cx) })   // 暂停时即时求值用（不可枚举：事件常被整体展示 / 序列化）
+    const s = yield ret                                                  // 暂停的 Promise 可以兑现成 { v }：替换这次调用的返回值
+    if (s && typeof s == 'object' && 'v' in s) v = s.v
     return v
   } finally { cx.stack.pop() }
 }
@@ -444,7 +544,7 @@ const step = (it, send) => sync(it, () => it.next(send))
 const warn = (m, n) => (CX?.log || L.host?.log)?.push({ warn: m, n })
 // w@：打印一行并带上调用点；args 是实参的 AST 节点（各带 a/b），spans 供 P2 的逐参部件
 const wAt = ctxGen(function* (c, ...a) {
-  c.cx.log.push({ out: a.map(x => show(x)).join(' '), a: c.a, b: c.b, spans: c.args.map(v => isT(v) && v.a >= 0 ? [v.a, v.b] : null), run: c.cx.run })
+  c.cx.log.push({ out: a.map(x => show(x)).join(' '), a: c.a, b: c.b, spans: c.args.map(v => (isT(v) || v instanceof Lit) && v.a >= 0 ? [v.a, v.b] : null), run: c.cx.run })
   return a.at(-1) ?? NO
 })
 const globals = cx => { const e = new Env(null); e.cx = cx; e.m.set('w@', Object.assign(wAt, { bname: 'w@' })); return e }
@@ -458,7 +558,7 @@ function steps(ast, prog = ast, last = false, log = [], cx = newCx(L.host, log))
 }
 function* st(ast, prog, last, cx) {
   try {
-    const env = globals(cx), stmts = prog.slice(1)
+    const env = globals(cx), stmts = prog.slice(1); cx.env = env
     if (ast === prog) return { value: yield* body(stmts, env, prog, last), log: cx.log }
     for (const s of stmts) if (isDef(s) && s !== ast) try { yield* ev(s, env, true) } catch (e) { if (!(e instanceof LispErr)) throw e }
     return { value: yield* ev(ast, env, stmts.includes(ast)), log: cx.log }
@@ -567,7 +667,7 @@ def opt(a ..): [xargs {b 1}] (OK a) ...   # 可选参数名必须以 _ 结尾
 (OK {sum (add 1 2) xs [1 2 (3 ] ok "fine"})`,
 })
 
-const L = { NO, Ret, LispErr, B, Walk, Env, ev, call, gen, ctxGen, steps, step, newCx, atOf, run, node, show, fname, truthy, toJS, fromJS, exec, callback, start, hostOf, host: null, RULES, CALC, CHAIN, funcs,
+const L = { NO, Ret, LispErr, B, Walk, Env, ev, call, gen, ctxGen, steps, step, newCx, atOf, run, node, show, fname, truthy, toJS, fromJS, exec, callback, start, hostOf, pool, Lit, evalIn, envOf, host: null, RULES, CALC, CHAIN, funcs,
   get cx() { return CX },   // 当前同步段（p5 的 console 拦截器用它取调用点）
 }
 if (typeof module != 'undefined') module.exports = L

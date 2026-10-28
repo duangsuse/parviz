@@ -13,7 +13,7 @@ header{display:flex;gap:10px;align-items:center;padding:4px 10px;border-bottom:1
 header b{color:var(--fg)}
 button,select{background:#2f3440;color:var(--fg);border:1px solid var(--bd);border-radius:3px;font:inherit;padding:1px 8px;cursor:pointer}
 button:hover,select:hover{border-color:var(--B)}
-#play{color:var(--G)} #stop{color:var(--R)} #resume{color:var(--Y);border-color:var(--Y)} #pick.on{color:var(--Y);border-color:var(--Y)}
+#play{color:var(--G)} #resume{color:var(--Y);border-color:var(--Y)} #rate{color:var(--mut);font-variant-numeric:tabular-nums;min-width:12ch;text-align:right}
 #status{margin-left:auto}
 main{flex:1;display:flex;min-height:0}
 #left{flex:0 0 52%;display:flex;flex-direction:column;min-width:0;border-right:1px solid var(--bd)}
@@ -73,13 +73,12 @@ pre{margin:0}
 <header>
   <b>parviz · p5</b> <a href="./index.html" title="回到递归下降调试器">debugger</a>
   <button id="play" title="运行（Ctrl+Enter）：toplevel 语句 = setup，tick / do 注册每帧函数">▶ 运行</button>
-  <button id="stop" title="停止（Ctrl+Shift+Enter）">■ 停止</button>
-  <button id="resume" title="断点处继续（F5 继续 · F8 下一帧 · F11 下一条语句）" hidden>⏯ 继续</button>
-  <button id="pick" title="取源：点画布上的图形，跳到画它的源码">◎ 取源</button>
+  <button id="rate" title="fps：画布每秒重画次数（p.draw）· Hz：tick 每秒被触发的次数。点击：在源码里补上限——[frameRate N] 和 (tick N f)，再用滚轮调。停止：Ctrl+Shift+Enter">— fps · — Hz</button>
+  <button id="resume" title="断点处继续（F9 继续 · F10 下一行 · F8 取消断点并继续 · F11 下一帧）" hidden>⏯ 继续</button>
   <button id="files" title="打开文件夹（Ctrl+E）· Ctrl+S 保存">🗀 文件夹</button>
   <label title="编辑后自动重新运行"><input type="checkbox" id="auto"> 自动刷新</label>
   <select id="ex" title="内置示例"></select>
-  <span title="双击源码里的函数名切换断点；函数每次返回时在这里暂停，F8 继续（含 JS 函数名如 circle / log）">双击函数名：断点 · F8 继续 · Ctrl+Enter 运行</span>
+  <span title="双击源码里的函数名切换断点；函数每次返回时在这里暂停，F9 继续（含 JS 函数名如 circle / log）">双击函数名：断点 · F8 继续 · 画布上悬停/右键：取源 · 数字上滚轮：微调</span>
   <span id="status"></span>
 </header>
 <main>
@@ -111,6 +110,7 @@ pre{margin:0}
 <script src="ui/explorer.js"></script>
 <script src="p5/exec.js"></script>
 <script src="p5/tweak.js"></script>
+<script src="p5/pick.js"></script>
 <script src="p5/app.js"></script>
 </body>
 </html>

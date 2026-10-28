@@ -9,19 +9,21 @@
 const head = x => !Array.isArray(x) ? null : x[0] == '$' || x[0] == '$$' ? x[1] : x[0] == '.' && Array.isArray(x[2]) ? x[2][1] : null
 const keyOf = (i, f) => i + '@' + f
 const DBG = {
-  bps: new Set(), names: new Set(), mode: 'run', doc: null,
-  frameNo: 0, target: 0, lastKey: null, onPause: null, _q: [], calls: [],
+  bps: new Set(), names: new Set(), conds: new Map(), onCond: null, mode: 'run', doc: null,   // conds：函数名 → 日志断点的条件（有条件就不暂停，条件成立时 onCond 负责打印）
+  frameNo: 0, target: 0, lastKey: null, onPause: null, _q: [],
   setDoc(doc) { this.doc = doc && doc.stmts && doc.stmts.length ? doc.stmts : null; this.lastKey = null },
   // 只清运行期状态；断点跨运行保留
-  reset() { this.mode = 'run'; this.lastKey = null; this.frameNo = 0; this.target = 0; this.doc = null; this.calls.length = 0; this.cancel() },
+  reset() { this.mode = 'run'; this.lastKey = null; this.frameNo = 0; this.target = 0; this.doc = null; this.cancel() },
   range(a, b) { const k = a + ':' + b; if (this.bps.has(k)) { this.bps.delete(k); return false } this.bps.add(k); return true },
   hasRange(a, b) { return a != null && this.bps.has(a + ':' + b) },
   name(n, on) {
     if (n == null) return false
     const k = String(n); if (on === undefined) on = !this.names.has(k)
-    on ? this.names.add(k) : this.names.delete(k); return on
+    on ? this.names.add(k) : (this.names.delete(k), this.conds.delete(k)); return on
   },
   hasName(n) { return n != null && this.names.has(String(n)) },
+  // ret 事件命中的断点名：Lisp 函数名 / 内建名 / 调用头写的名字（JS 函数如 circle 的 f.name 常是空或 bound，要看调用头）
+  nameOf(e) { for (const n of [e.f?.name, e.f?.bname, head(e.x?.[1])]) if (this.hasName(n)) return String(n); return null },
   // 事件所在的语句（Doc.stmts 二分）；没有语句表时返回 -1
   stmtOf(a) {
     const S = this.doc; if (!S || a == null || a < 0) return -1
@@ -29,12 +31,19 @@ const DBG = {
     while (lo <= hi) { const m = (lo + hi) >> 1; if (a < S[m][0]) hi = m - 1; else if (a >= S[m][1]) lo = m + 1; else return m }
     return -1
   },
-  // p5 的 tick 入口（p.draw 第一件事）：本帧的事件都带新的 frameNo；pick 的调用记录也在这里清零（早于用户第一笔绘制）
-  frame() { this.frameNo++; this.calls.length = 0 },
+  // p5 的 tick 入口（p.draw 第一件事）：本帧的事件都带新的 frameNo
+  frame() { this.frameNo++ },
   // 命中返回原因（'bp' | 'name' | 'line' | 'frame'），否则 null；只在命中时更新 lastKey
   hit(e) {
     if (e.a != null && this.hasRange(e.a, e.b)) return 'bp'
-    if (e.ph == 'ret' && (this.hasName(e.f?.name) || this.hasName(head(e.x)))) return 'name'
+    if (e.ph == 'ret') {
+      const nm = this.nameOf(e)
+      if (nm != null) {
+        const c = this.conds.get(nm)
+        if (c) { this.onCond?.(e, c, nm); return null }   // 日志断点：条件成立时打印，不暂停
+        return 'name'
+      }
+    }
     if (this.mode == 'line') {
       if (e.a == null) return null
       const k = keyOf(this.stmtOf(e.a), this.frameNo)
@@ -46,13 +55,14 @@ const DBG = {
     return null
   },
   // 从暂停处继续：F11 一条语句 / F8 下一帧 / 继续
-  stepLine(e) { this.mode = 'line'; this.lastKey = e && e.a != null ? keyOf(this.stmtOf(e.a), this.frameNo) : null; return this._go() },
-  nextFrame(e) {
-    if (this.frameNo == 0) return this.stepLine(e)                 // 没有帧概念（index）→ 退化为逐语句
-    this.mode = 'frame'; this.target = this.frameNo + 1; this.lastKey = null; return this._go()
+  // send：兑现给暂停点的值；{ v } 会替换暂停在 ret 处那次调用的返回值（见 lisp.js call）
+  stepLine(e, send) { this.mode = 'line'; this.lastKey = e && e.a != null ? keyOf(this.stmtOf(e.a), this.frameNo) : null; return this._go(send) },
+  nextFrame(e, send) {
+    if (this.frameNo == 0) return this.stepLine(e, send)           // 没有帧概念（index）→ 退化为逐语句
+    this.mode = 'frame'; this.target = this.frameNo + 1; this.lastKey = null; return this._go(send)
   },
-  resume() { this.mode = 'run'; this.lastKey = null; return this._go() },
-  _go() { const r = this._q.shift(); return !!r && (r(), true) },
+  resume(send) { this.mode = 'run'; this.lastKey = null; return this._go(send) },
+  _go(send) { const r = this._q.shift(); return !!r && (r(send), true) },
   // 页面用：命中就挂起并交给 onPause，返回 Promise
   at(e) {
     const why = this.hit(e); if (!why) return

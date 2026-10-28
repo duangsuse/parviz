@@ -130,6 +130,19 @@ const exec = async src => { const ss = P.feed(src); P.eat(gh, ss); assert.deepSt
   let hits = 0
   jsHost({ pause: e => e.ph == 'ret' && e.f?.name == 'sq' ? new Promise(r => setTimeout(() => { hits++; r() }, 10)) : undefined })
   r = await exec('def sq(x) (* x x)\n(w@ (sq 3) (sq 4))'); assert.deepStrictEqual([r.log, hits], [['9 16'], 2])
+  // 暂停点兑现 { v } → 替换这次调用的返回值；暂停时 ev.env 是这一帧的环境，evalIn 在里面即时求值（OK = 返回）
+  let seenEnv = null
+  jsHost({ pause: e => e.ph == 'ret' && e.f?.name == 'sq' ? (seenEnv = e.env, Promise.resolve({ v: 100 })) : undefined })
+  r = await exec('def sq(x) (* x x)\n(w@ (sq 3))'); assert.deepStrictEqual(r.log, ['100'])
+  const q = P.feed('(+ x 1)\n(OK (* x 10))'); P.eat(Object.assign(P.grammar(L.RULES), { builtins: { has: () => true } }), q)
+  assert.deepStrictEqual(q.errs, [])
+  const ev = L.evalIn(q.value, seenEnv, { '@ret': 9 }); assert.deepStrictEqual([ev.value, ev.ret], [30, true])   // x = 3；OK 提前返回
+  // 日志断点：有条件的名字不暂停，条件成立才通知 onCond
+  { const D = require('../ui/debug.js'); D.reset(); D.name('sq', true); D.conds.set('sq', { text: 'c' })
+    const got = []; D.onCond = (e, c, n) => got.push(n)
+    assert.strictEqual(D.hit({ ph: 'ret', f: { name: 'sq' }, a: 1, b: 2 }), null); assert.deepStrictEqual(got, ['sq'])
+    assert.strictEqual(D.hit({ ph: 'ret', f: {}, x: ['()', ['$$', 'sq']], a: 1, b: 2 }), null)   // JS 函数的 f.name 是空的：靠调用头名字
+    D.conds.clear(); assert.strictEqual(D.hit({ ph: 'ret', f: {}, x: ['()', ['$$', 'sq']], a: 1, b: 2 }), 'name') }
   let alive = true; jsHost({ alive: () => alive }); setTimeout(() => { alive = false }, 5)
   r = await exec('[wait 20]\n(w@ "no")'); assert.strictEqual(r.cancelled, true); assert.deepStrictEqual(r.log, [])
   // 不装宿主时仍是封闭的：console 不是内建，解析期就报未定义

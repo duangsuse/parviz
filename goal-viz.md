@@ -21,7 +21,7 @@
 | P2 声明与语句边界 | 完成：`@stmt`、`(tweak …)` 语法、`Doc.stmts`、`p5/tweak.js` 改读声明（vec2/size/num/angle/color） |
 | P3 控制器 | 完成：`ui/debug.js`（范围/名字断点、F8 帧、F11 语句）；两页接入；p5 的 `DBG.frame()` 在 `p.draw` 最前 |
 | P3 pick | 完成：IDEA.md 的亮点法（帧起点撒点 + 逐 ctx 方法读回 + 栈顶归属），`Tweak.geo` bbox 兜底；`Sloc.pick` 画布→源码 |
-| P3 暂停改值 | 完成：`ret` 暂停行的 JSON 输入框，原地改对象/数组 |
+| P3 暂停改值 | 完成并改版：`ret` 暂停行下面是即时求值输入框（帧环境，`@args`/`@ret`）；`(OK v)` 兑现 `{v}` 替换返回值；`? 条件` 转日志断点（`DBG.conds`，`onCond` 打印不暂停）。此前的 JSON 输入框已删 |
 | P4 xref 共享 | 完成：`ui/xref.js` 两页共用；`Doc.edges` 填好；`Sloc.pick` 与 ref/rev 同层绘制 |
 | P5 会话/explorer | 完成：`ui/session.js`（文本/句柄/脏标记）+ `ui/explorer.js`（Ctrl+E，FSA 逐层目录树，无 FSA 退回文件选择）；页面仍保留自己的 `ss/cur`（单文档） |
 
@@ -31,7 +31,8 @@
 - 声明下标从 **0** 起；`size` 与 `vec2` 都吃两个下标，`size` 只影响显示（w/h、按画布）。
 - 颜色按**字面量前缀**匹配：`(color 0 1 2 3)` 对上 `fill 243 139 168 s.a` 仍可调 RGB；灰阶 `fill 255` 不生成部件。
 - `DBG` 的 API：`hit(e)`（index 的循环用）、`at(e)`（p5 的 `host.pause` 用）、`frame()`、`stepLine(e)`、`nextFrame(e)`、`resume()`、`cancel()`。
-- 键位：p5 = `F5` 继续 / `F8` 下一帧 / `F11` 下一条语句；index = `F8` 到断点或判断 / `F11` 逐语句。
+- 键位：p5 = `F8` 等右键设断点（暂停中 = 取消当前断点并继续）/ `F9` 继续 / `F10` 下一条语句 / `F11` 下一帧；index = `F8` 到断点或判断 / `F11` 逐语句。
+- 日志断点条件自动套 `(> …)`；`A B C…` = 本次实参，`$A $B…` = 同断点上次命中的实参（`DBG.conds[name].prev`）。
 - index 的步进器改用 `LISP.step(it)`（设置当前 `cx`），不再直接 `it.next()`。
 
 ---
@@ -326,8 +327,9 @@ Sloc.pick = { from: DOMRect, to: DOMRect, label, cls }
 - `console.log` 的定位只在同步段有效；异步回调里无跨度（写进 README）。
 - `L.cx` 是“当前同步段”指针，p5 内部库自己打的 log 可能带上前一次调用的跨度；
   拦截器必须校验栈顶 `f` 就是被包装的 console 函数，否则不加跨度。
+- 断点按名字匹配要同时看 `f.name` / `f.bname` / 调用头（`x[1]`）：JS 函数的 `f.name` 常是空或 `bound`；曾经只看 `e.x` 本身（整个调用节点）导致 JS 函数断点失效。
 - `ext` 钩子只在“调用到 JS”后触发；Walk 内部步骤不触发，避免 pick 记录被语法噪音污染。
-- pick 的亮点法在 `p.draw` 里（用户第一笔绘制之前）撒点，逐 ctx 方法读回并重新撒点；只在取源模式读像素。暂停在断点上时 tick 被占用，重画不经过它，取源退回 bbox（需要 `(tweak …)` 声明几何）。
+- pick 的亮点法在 `p.draw` 里（用户第一笔绘制之前）撒点，逐 ctx 方法读回并重新撒点；只在被请求的那一帧读像素（悬停 / 右键，由下一帧的 `p.draw` 兑现，不额外重画）。暂停在断点上时 tick 被占用，重画不经过它，取源退回 bbox（需要 `(tweak …)` 声明几何）。
 - F11 依赖 `@stmt`；没有语句规则的语法退化为逐事件（JSON/CSV）。
 - pick 的几何来自 P2 的声明；未声明格式只能报名字。
 - 亮点/标记的撒点时机固定在 `DBG.frame()`；不要改成挂 `clearRect`，否则 `background` 会覆盖它。

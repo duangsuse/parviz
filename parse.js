@@ -332,6 +332,8 @@ const T = (tag, kids, n, ns = []) => {
 // 叶子节点（名字 "$" / 全局键 "$$" / 字符串字面 ""）：不分配 kids 临时数组；ns 共用一个空数组（叶子的 kid 就是节点自己，没人按 ns 取）
 const NS0 = Object.freeze([])
 const leaf = (tag, v, n) => { const a = new Tg(2); a[0] = tag; a[1] = v; a.node = n; a.ns = NS0; a.a = n ? n.a : -1; a.b = n ? n.b : -1; return a }
+// 词条/行内锚点用的 16 位 FNV 哈希（onedit 的 hashline 与常量池共用）
+const hash4 = s => { let x = 0x811c9dc5; for (let i = 0; i < s.length; i++) x = Math.imul(x ^ s.charCodeAt(i), 16777619); return (x >>> 16).toString(16).padStart(4, '0') }
 const isName = t => t === '$' || t === '$$'
 // 产生某节点值的各组成部分对应的 CST 节点（与 vals() 一一对应）
 const parts = n => {
@@ -716,7 +718,7 @@ Name    /[A-Z]\\w*/ :ref
 ${META_BODY}`
 examples.push({ name: 'Meta v1（纯结构）', input: META_V1, rules: META_V1 }, { name: 'Meta v2（自描述 + Lexscope）', input: META, rules: META })
 
-const P = { FAIL, EOF, Node, walk, feed, eat, ws, re, lit, kw, seq, alt, opt, many, join, par, fn, rule, mark, recur, prec, to, bind, funcs, lexscope, T, leaf, leaves, isT, isName, parts, grammar, mtok, examples, META, META_V1, errsOf, f }
+const P = { FAIL, EOF, Node, hash4, walk, feed, eat, ws, re, lit, kw, seq, alt, opt, many, join, par, fn, rule, mark, recur, prec, to, bind, funcs, lexscope, T, leaf, leaves, isT, isName, parts, grammar, mtok, examples, META, META_V1, errsOf, f }
 P.funcs = {}    // 供其他模块（lisp.js）注册额外 :func
 P.walkers = {}  // @walk name：Ctrl+Enter 时对解析结果执行的遍历器 { run(value), steps(value), node(ast, value) }
 if (typeof module != 'undefined') module.exports = P

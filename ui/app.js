@@ -1,7 +1,7 @@
 /* app.js — 调试器页面：编辑器（共享 ui/editor.js）、Doc 树与三个 Tab、sloc 全屏标注与 $n 标记、
    步进可视化、逐步执行、规则区、颜色表。F12：$1 输入流  $2 最后悬停  $3 语法  $4 最近结果  $5.. 标记 */
 'use strict'
-const { feed, eat, grammar, walk, examples, errsOf, Node } = P
+const { feed, eat, grammar, walk, examples, errsOf, Node, hash4 } = P
 const clip = (s, n = 40) => s.length > n ? s.slice(0, n) + '…' : s
 const A = i => String.fromCharCode(65 + i)
 
@@ -30,7 +30,6 @@ const defaultOnedit = (o, n, info) => {
 /* ---------- onedit 的 hashline：词条哈希 = 自身文本 + 左侧至行首的字符；解析完先通知一遍，之后只在有变更时调用 ----------
    对齐：哈希相同的公共前缀/后缀不动（行首上下文让对齐不跨行误配）；中间段按文本做 LCS，
    文本相同的只是被左边的编辑带着改了哈希，不算编辑；其余按位置配对成 改/增/删。 */
-const hash4 = s => { let x = 0x811c9dc5; for (let i = 0; i < s.length; i++) x = Math.imul(x ^ s.charCodeAt(i), 16777619); return (x >>> 16).toString(16).padStart(4, '0') }
 const Edits = {
   seq: null,   // 上一次的词条序列 [{h, t, n, cnt}]；换示例/改语法时清空
   sync(ss) {

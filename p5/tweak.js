@@ -5,6 +5,8 @@
    (tweak rotate (angle 0))               # 一个角度（源码写弧度，滑块显示角度）
    声明只在顶层；它的实参下标指向调用处的位置。vec2/size → 画布缩略板上点/拖；color → 底色 + 拾色器；
    num/angle → 数字框 / 滑块。十六进制字面量（#rgb、#rrggbb…）仍然无条件识别，不需要声明。
+   没有声明的数字字面量（常量池里的每个格子）也有最基础的部件：悬停显示数字框，滚轮微调（同 DevTools：±1 · Shift ±10 · Alt ±0.1 · Ctrl/Cmd ±100）；
+   每一步都会先看运行有没有报错——报错就退回上一个值，并把这个方向的区间记为边界（区间显示在部件里）。
    依赖 editor.js 的 Editor 与 parse.js 的 isT；p5ui.js 每次解析后调 Tweak.scan(ss)，启动时 Tweak.init(编辑器, 取画布尺寸)。 */
 'use strict'
 const Tweak = (() => {
@@ -43,8 +45,9 @@ const Tweak = (() => {
   }
   const toHex = (r, g, b) => '#' + [r, g, b].map(v => clamp(v, 0, 255).toString(16).padStart(2, '0')).join('')
 
-  let ed = null, ws = [], problems = [], decls = new Map, canvasSize = () => null, cv = [400, 300], hlNames = []
-  let cur = null, pinned = false, mine = false, hideT = 0
+  let ed = null, ws = [], problems = [], decls = new Map, canvasSize = () => null, cv = [400, 300], hlNames = [], host = null
+  let openedAt = 0, probing = false, bounds = new Map
+  let cur = null, pinned = false, mine = false, hideT = 0, anchor = null   // anchor：右键取源时弹层直接出现在鼠标处
   const tw = document.createElement('div'); tw.id = 'tw'; document.body.append(tw)
   const val = r => ed.value.slice(r.a, r.b)
   // 颜色部件的 nums：rgb = [r g b (a)]；hex = [字面量内容范围]；位置部件 nums = [x y]
@@ -53,7 +56,7 @@ const Tweak = (() => {
   const alphaOf = w => w.kind == 'hex' ? parseHex(val(w.nums[0]))[3] : w.nums[3] ? clamp(+val(w.nums[3]), 0, 255) : 255
 
   /* ---------- 扫描：读顶层 (tweak …) 声明，再在 AST 里找这些函数的调用，记下每个可调实参的源码范围 ---------- */
-  function scan(ss) {
+  function scan(ss, cells = []) {
     const s = ss.src, out = [], bad = []
     cv = [400, 300]
     const D = declsOf(ss.value); decls = D
@@ -92,7 +95,12 @@ const Tweak = (() => {
       for (let i = 1; i < x.length; i++) visit(x[i])
     }
     try { if (isT(ss.value)) visit(ss.value) } catch { out.length = 0 }
+    // 其余数字字面量（常量池的格子）：基础部件。声明已经管着的、(tweak …) 声明自己的下标都不算
+    const used = new Set(out.flatMap(w => w.nums.map(r => r.a))), ds = [...D.values()]
+    for (const c of cells) if (!used.has(c.a) && !ds.some(d => c.a >= d.a && c.b <= d.b)) out.push({ kind: 'lit', nums: [{ a: c.a, b: c.b }] })
+    const prevN = ws.length
     ws = out.sort((p, q) => p.nums[0].a - q.nums[0].a)
+    if (ws.length != prevN) bounds.clear()   // 结构变了：划定的区间按序号记，不再对得上
     problems = bad
     if (cur) {   // 弹层绑定到重新解析出的同一个部件
       const w = ws.find(x => x.kind == cur.w.kind && x.nums[0].a == cur.w.nums[0].a)
@@ -110,6 +118,7 @@ const Tweak = (() => {
     ws.forEach((w, i) => {
       const [a, b] = span(w), r = ed.range(a, b)
       if (w.kind == 'pos') return pos.push(r)
+      if (w.kind != 'rgb' && w.kind != 'hex') return
       const [R, G, B] = rgbOf(w), nm = 'tw-c' + i, hl = new Highlight(r)
       hl.priority = 10; CSS.highlights.set(nm, hl); hlNames.push(nm)
       css += `::highlight(${nm}){background-color:rgb(${R} ${G} ${B});color:${0.299 * R + 0.587 * G + 0.114 * B > 150 ? '#000' : '#fff'}}\n`
@@ -129,6 +138,7 @@ const Tweak = (() => {
     mine = true; try { ed.el.dispatchEvent(new InputEvent('input', { inputType: 'insertText' })) } finally { mine = false }
     paintAll()
   }
+  const setOne = (w, j, str) => setNums(w, w.nums.map((r, i) => i == j ? str : val(r)))
   const setRgb = (w, [r, g, b]) => {
     if (w.kind == 'rgb') return setNums(w, [r, g, b].map(String))
     const t = val(w.nums[0]), hex = toHex(r, g, b) + (t.length == 5 || t.length == 9 ? parseHex(t)[3].toString(16).padStart(2, '0') : '')
@@ -136,12 +146,13 @@ const Tweak = (() => {
   }
 
   /* ---------- 弹层 ---------- */
-  function hide() { if (pinned) return; clearTimeout(hideT); tw.style.display = 'none'; tw.textContent = ''; cur = null }
+  function hide() { if (pinned) return; clearTimeout(hideT); tw.style.display = 'none'; tw.textContent = ''; cur = null; anchor = null }
   const later = () => { clearTimeout(hideT); hideT = setTimeout(hide, 220) }
   function place(w) {
     const [a, b] = span(w), q = ed.rect(a, b)
     tw.style.display = 'block'
     const W = tw.offsetWidth, H = tw.offsetHeight
+    if (anchor) { tw.style.left = clamp(anchor.x + 6, 4, innerWidth - W - 8) + 'px'; tw.style.top = clamp(anchor.y + 6, 4, innerHeight - H - 8) + 'px'; return }
     let y = q.top - H - 6; if (y < 4) y = q.bottom + 6   // 在文字上方（像 Monaco），免得挡住下一行的部件
     tw.style.left = clamp(q.left, 4, innerWidth - W - 8) + 'px'; tw.style.top = Math.max(4, y) + 'px'
   }
@@ -187,6 +198,9 @@ const Tweak = (() => {
     c.onpointermove = e => { if (c.hasPointerCapture(e.pointerId)) set(e) }
     c.onpointerup = () => { pinned = false }
     tw.append(c, cap); draw()
+    // 缩略图跟着运行里的画布走（重跑 / 热编辑 / 动画都会变），部件开着就每帧重画
+    const loop = () => { if (!c.isConnected || tw.style.display == 'none') return; draw(); requestAnimationFrame(loop) }
+    requestAnimationFrame(loop)
   }
   // num / angle：一个数字的步进器；angle 的滑块按角度显示，源码里写弧度
   function showNum(w) {
@@ -196,6 +210,13 @@ const Tweak = (() => {
     inp.onblur = () => { pinned = false; later() }
     inp.oninput = () => { setNums(cur.w, [inp.value === '' ? '0' : inp.value]) }
     row.append(inp); tw.append(row)
+    const cap = document.createElement('div'); cap.className = 'cap'; tw.append(cap); capOf(cap, cur.w, 0)
+  }
+  // 说明行：滚轮提示 + 已划定的区间
+  const keyOf = (w, j) => ws.indexOf(w) * 8 + j
+  function capOf(el, w, j) {
+    const b = bounds.get(keyOf(w, j)) || {}, r = b.lo != null || b.hi != null ? `   区间 [${b.lo ?? '−∞'}, ${b.hi ?? '+∞'}]` : ''
+    el.textContent = '滚轮微调 ±1 · Shift ±10 · Alt ±0.1 · Ctrl ±100' + r
   }
   function showAngle(w) {
     const v = +val(w.nums[0]) || 0, inp = document.createElement('input'), lab = document.createElement('span'), row = document.createElement('div')
@@ -218,8 +239,8 @@ const Tweak = (() => {
 
   /* ---------- 几何：pick 用声明把调用实参算成 bbox（实参是运行期值，不要求字面量） ---------- */
   // vec2 + size → 矩形；vec2 + num → 圆；两个 vec2 → 线段；单个 vec2 → 3px 的点
-  function geo(name, args) {
-    const d = decls.get(name); if (!d) return null
+  function geo(name, args, d = decls.get(name)) {
+    if (!d) return null
     const get = g => g.idx.map(i => args[i])
     const num = v => typeof v == 'number' && isFinite(v)
     const pts = [], szs = []; let rad
@@ -237,8 +258,39 @@ const Tweak = (() => {
   }
   const inside = (g, x, y) => !!g && x >= g.x && x <= g.x + g.w && y >= g.y && y <= g.y + g.h
 
-  function init(editor, sizeOf) {
-    ed = editor; canvasSize = sizeOf
+  // 悬停点落在哪个部件的哪个数字上：[部件, 数字下标]（十六进制颜色不是数字）
+  const numAt = (x, y) => {
+    for (const w of ws) { if (w.kind == 'hex') continue
+      for (let j = 0; j < w.nums.length; j++) for (const q of ed.range(w.nums[j].a, w.nums[j].b).getClientRects()) if (x >= q.left - 1 && x <= q.right + 1 && y >= q.top - 1 && y <= q.bottom + 1) return [w, j] }
+    return null
+  }
+  // 滚轮一步：改一个数字；先让运行证明这个值没问题，报错就退回并把这个方向的区间划到上一个值
+  const frames = n => new Promise(r => { const f = () => --n > 0 ? requestAnimationFrame(f) : r(); requestAnimationFrame(f) })
+  async function wheelStep(w, j, dir, e) {
+    const idx = ws.indexOf(w), t = val(w.nums[j]), dec = (t.split('.')[1] || '').length
+    // 同 DevTools：默认 ±1，Shift ±10，Alt ±0.1，Ctrl/Cmd ±100（小数位数只增不减，避免 1.25 → 2）
+    const step = e.ctrlKey || e.metaKey ? 100 : e.shiftKey ? 10 : e.altKey ? 0.1 : 1, d2 = Math.min(6, Math.max(dec, e.altKey ? 1 : 0))
+    const fmt = v => { const s = v.toFixed(d2); return +s === 0 ? (0).toFixed(d2) : s }
+    const nv = +fmt(+t + dir * step), key = keyOf(w, j), lim = bounds.get(key) || {}
+    const hard = w.kind == 'rgb' ? [0, 255] : []
+    if ((lim.hi != null && nv > lim.hi) || (lim.lo != null && nv < lim.lo) || (hard[1] != null && nv > hard[1]) || (hard[0] != null && nv < hard[0])) return
+    const apply = s => { const x = ws[idx]; if (x) setOne(x, j, s) }
+    probing = true
+    try {
+      const ok = host?.probe ? await host.probe(() => apply(fmt(nv)), () => apply(t)) : (apply(fmt(nv)), true)
+      if (!ok) { const b = bounds.get(key) || {}; if (dir > 0) b.hi = +t; else b.lo = +t; bounds.set(key, b); host?.note?.(`${t} → ${fmt(nv)} 报错，${dir > 0 ? '上' : '下'}界定为 ${t}`) }
+      await frames(1)
+      const x = ws[idx]; if (x) { if (cur?.w !== x) { pinned = false; show(x) } else { const c = tw.querySelector('.cap'); if (c) capOf(c, x, j); const i = tw.querySelector('input[type=number]'); if (i) i.value = val(x.nums[0]) } }
+    } finally { probing = false }
+  }
+  // 打开某个位置所在行的第一个部件并钉住（取源右键用）
+  function openFirst(a, pt) {
+    const s = ed.value, ls = s.lastIndexOf('\n', a - 1) + 1, le = (i => i < 0 ? s.length : i)(s.indexOf('\n', a))
+    const w = ws.find(w => { const x = span(w)[0]; return x >= ls && x < le }); if (!w) return false
+    anchor = pt || null; pinned = false; show(w); pinned = true; openedAt = performance.now(); return true
+  }
+  function init(editor, sizeOf, h = null) {
+    ed = editor; canvasSize = sizeOf; host = h
     const inRects = (w, x, y) => { const [a, b] = span(w); for (const q of ed.range(a, b).getClientRects()) if (x >= q.left - 1 && x <= q.right + 1 && y >= q.top - 1 && y <= q.bottom + 1) return true; return false }
     $.ev(ed.el, {
       mousemove() {
@@ -249,12 +301,21 @@ const Tweak = (() => {
         clearTimeout(hideT); if (cur?.w !== w) show(w)
       },
       mouseleave: later,
-      scroll() { pinned = false; hide() },
+      scroll() { if (performance.now() - openedAt < 250) return; pinned = false; hide() },
       input() { if (!mine) { pinned = false; hide() } },
     })
+    $.ev(ed.el, {   // 悬停在数字上滚轮：微调（不在数字上时照常滚动编辑器）
+      wheel() {
+        const e = $.event, dy = e.deltaY || e.deltaX   // Shift / Alt + 滚轮在 Chromium(Linux) 里常被换算成横向滚动：deltaY 为 0、deltaX 有值
+        if (!dy) return
+        const hit = numAt(e.clientX, e.clientY); if (!hit) return
+        e.preventDefault(); if (probing) return   // 含 Ctrl：数字上不缩放页面
+        wheelStep(hit[0], hit[1], dy < 0 ? 1 : -1, e)
+      },
+    }, { passive: false })
     $.ev(tw, { mouseenter() { clearTimeout(hideT) }, mouseleave: later })
     $.ev(window, { pointerdown() { const { target } = $.event; if (pinned && !tw.contains(target)) { pinned = false; hide() } } }, true)
     $.ev(window, { keydown() { if ($.event.key == 'Escape') { pinned = false; hide() } } })
   }
-  return { init, scan, geo, inside, get decls() { return decls }, get widgets() { return ws }, get problems() { return problems } }
+  return { init, scan, geo, inside, openFirst, get mine() { return mine }, get decls() { return decls }, get widgets() { return ws }, get problems() { return problems } }
 })()

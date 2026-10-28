@@ -3,6 +3,7 @@
      cls   行类名：log / warn / eitem / pause / val / cm / info / error…
      lead  行首加粗（调试器的 $4）
      note  行尾灰字（"// 12ms · 0 个错误"）
+     （hooks.enter(el)：悬停任意一行时回调，p5 页用它按需检测颜色 / 坐标）
      span  源码区间：点击 → hooks.open(span)，悬停 → hooks.hover(span, el)，离开 → hooks.leave(span, el)
      html  直接写 innerHTML（p5 的 html 函数/echo），其余一律 textContent
    push 追加（p5 的实时输出，超过 limit 丢最旧）；set 整块替换（调试器每次重绘）；clear 清空。 */
@@ -19,6 +20,7 @@ function mount(host, hooks = {}) {
     if (it.html != null) { e = mk(it.cls || 'log', []); e.innerHTML = it.html }
     else e = mk(it.cls || 'log', [it.lead ? tx('b', null, it.lead) : null, it.text != null ? String(it.text) : null, it.note ? tx('span', 'cm', it.note) : null])
     if (it.title) e.title = it.title
+    if (hooks.enter) e.addEventListener('mouseenter', () => hooks.enter(e))   // 任何行（不要求有 span）：悬停才检测内容
     const sp = spanOf(it.span)
     if (sp) {
       e.dataset.a = sp.a; e.dataset.b = sp.b

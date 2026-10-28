@@ -134,7 +134,7 @@ tick [=> ()
 `,
 }, {
   name: '分形树：def 递归 + 断点',
-  src: `# 双击函数名（如 branch / grow）设断点，每次返回都暂停，F8 继续
+  src: `# 双击函数名（如 branch / grow）设断点，每次返回都暂停，F9 继续
 (tweak background (color 0 1 2 3))
 (tweak stroke (color 0 1 2 3))
 (tweak line (vec2 0 1) (vec2 2 3))
