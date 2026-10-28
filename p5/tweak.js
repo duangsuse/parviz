@@ -1,4 +1,4 @@
-/* p5tweak.js — p5.html 编辑器里的数值小工具。按 p5 函数名硬编码判定整数实参是颜色还是位置，不看别的语义：
+/* tweak.js — p5.html 编辑器里的数值小工具。按 p5 函数名硬编码判定整数实参是颜色还是位置，不看别的语义：
    颜色  fill / stroke / background / tint 的 3 或 4 个整数实参（r g b [a]）、#rrggbb 字面量、"#rrggbb" 字符串
          → 数字底色就是该颜色；悬停出预览 + 原生拾色器（Monaco 风格），拾色即改源码。
    位置  circle / rect / text / line / translate … 里的 (x y) 两个整数实参 → 虚线下划线；悬停出画布缩略板（叠着当前预览），
@@ -156,18 +156,21 @@ const Tweak = (() => {
   function init(editor, sizeOf) {
     ed = editor; canvasSize = sizeOf
     const inRects = (w, x, y) => { const [a, b] = span(w); for (const q of ed.range(a, b).getClientRects()) if (x >= q.left - 1 && x <= q.right + 1 && y >= q.top - 1 && y <= q.bottom + 1) return true; return false }
-    ed.el.addEventListener('mousemove', e => {
-      if (pinned) return
-      const w = ws.find(w => inRects(w, e.clientX, e.clientY))
-      if (!w) { if (cur) later(); return }
-      clearTimeout(hideT); if (cur?.w !== w) show(w)
+    $.ev(ed.el, {
+      mousemove() {
+        if (pinned) return
+        const { clientX, clientY } = $.event
+        const w = ws.find(w => inRects(w, clientX, clientY))
+        if (!w) { if (cur) later(); return }
+        clearTimeout(hideT); if (cur?.w !== w) show(w)
+      },
+      mouseleave: later,
+      scroll() { pinned = false; hide() },
+      input() { if (!mine) { pinned = false; hide() } },
     })
-    ed.el.addEventListener('mouseleave', later)
-    ed.el.addEventListener('scroll', () => { pinned = false; hide() })
-    ed.el.addEventListener('input', () => { if (!mine) { pinned = false; hide() } })
-    tw.addEventListener('mouseenter', () => clearTimeout(hideT)); tw.addEventListener('mouseleave', later)
-    addEventListener('pointerdown', e => { if (pinned && !tw.contains(e.target)) { pinned = false; hide() } }, true)
-    addEventListener('keydown', e => { if (e.key == 'Escape') { pinned = false; hide() } })
+    $.ev(tw, { mouseenter() { clearTimeout(hideT) }, mouseleave: later })
+    $.ev(window, { pointerdown() { const { target } = $.event; if (pinned && !tw.contains(target)) { pinned = false; hide() } } }, true)
+    $.ev(window, { keydown() { if ($.event.key == 'Escape') { pinned = false; hide() } } })
   }
   return { init, scan, get widgets() { return ws } }
 })()

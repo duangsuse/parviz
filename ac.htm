@@ -82,6 +82,17 @@
 <script>
 const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+/* 事件：$.ev(el, { click() { const { target } = $.event } })（与 ui/editor.js 同一套写法） */
+const evStack = []
+Object.defineProperty($, 'event', { get: () => evStack[evStack.length - 1] })
+$.ev = (el, map, opts) => {
+  const offs = []
+  for (const t in map) {
+    const h = e => { evStack.push(e); try { map[t].call(el, e) } finally { evStack.pop() } }
+    el.addEventListener(t, h, opts); offs.push(() => el.removeEventListener(t, h, opts))
+  }
+  return () => { for (const f of offs) f() }
+}
 
 /* ---------- 示例 / 切换 ---------- */
 const PRESETS = [
@@ -337,16 +348,17 @@ $('#step').onclick = step;
 $('#reset').onclick = init;
 $('#auto').onclick = () => { if (timer) return stopAuto(); $('#auto').textContent = 'pause'; timer = setInterval(step, 550); };
 $('#preset').onchange = e => loadPreset(+e.target.value);
-['#pats', '#text'].forEach(id => $(id).addEventListener('input', () => { stopAuto(); init(); }));
-['#words', '#q', '#radix', '#cnt'].forEach(id => $(id).addEventListener('input', updateTrie));
+for (const id of ['#pats', '#text']) $.ev($(id), { input() { stopAuto(); init() } })
+for (const id of ['#words', '#q', '#radix', '#cnt']) $.ev($(id), { input() { updateTrie() } })
 
 const isBlank = el => !el.closest('textarea,input,button,select,small,label');
-document.addEventListener('mousedown', e => {
-  if (!$('#acView').hidden && isBlank(e.target)) e.preventDefault(); // 保住 textarea 焦点，选区才可见
-});
-document.addEventListener('click', e => {
-  if (!$('#acView').hidden && isBlank(e.target)) step();
-});
+$.ev(document, {
+  mousedown() {
+    const { target } = $.event
+    if (!$('#acView').hidden && isBlank(target)) $.event.preventDefault()   // 保住 textarea 焦点，选区才可见
+  },
+  click() { if (!$('#acView').hidden && isBlank($.event.target)) step() },
+})
 
 loadPreset(0);
 </script>

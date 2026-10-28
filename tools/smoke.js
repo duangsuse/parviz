@@ -6,10 +6,30 @@ const P = require('../parse.js'), L = require('../lisp.js')
 const x = eval(fs.readFileSync(__dirname + '/../extra.js', 'utf8'))(P); Object.assign(P.funcs, x.funcs)
 const all = [...P.examples, ...x.examples]
 for (const e of all) {
-  const rules = e.rules ?? all.find(q => q.name == e.same)?.rules; if (!rules) continue
+  const rules = e.rules ?? all.find(q => q.name == e.same)?.rules
+  if (!rules) throw new Error(`${e.name}: rules 为空且 same 指向的示例不存在`)   // 别静默少跑一个示例
   const g = P.grammar(rules), ss = P.feed(e.input); P.eat(g, ss)
   const w = g.walk && P.walkers[g.walk], r = w && P.isT(ss.value) ? w.run(ss.value) : null
   console.log(e.name.padEnd(22), 'errs', ss.errs.length, r ? (r.err ?? w.show(r.value)) : '')
+}
+// 显示层契约：三种 Doc 的结构不变量（换 CST 表示时先挂在这里）
+{
+  const Doc = require('../ui/doc.js')
+  let docs = 0, bad = 0
+  for (const e of all) {
+    const rules = e.rules ?? all.find(q => q.name == e.same)?.rules; if (!rules) continue
+    const g = P.grammar(rules), ss = P.feed(e.input); P.eat(g, ss)
+    for (const d of [Doc.cst(ss, g), Doc.val(ss), Doc.gram(g)]) {
+      docs++
+      for (let i = 0; i < d.kind.length; i++) {
+        if (i !== d.root && d.parent[i] < 0) bad++
+        if (d.payload[i] >= d.objs.length) bad++
+        if (d.a[i] >= 0 && d.b[i] < d.a[i]) bad++
+        for (const p of [d.first[i], d.next[i], d.parent[i]]) if (p >= d.kind.length) bad++
+      }
+    }
+  }
+  assert.strictEqual(bad, 0, 'Doc 结构不变量'); console.log(`doc ok (${docs} docs)`)
 }
 const g = P.grammar(L.RULES)
 const lisp = src => { const ss = P.feed(src); P.eat(g, ss); const r = L.run(ss.value); return { errs: ss.errs.map(e => e.msg), out: r.log.filter(l => l.out != null).map(l => l.out), err: r.err, ss } }
@@ -58,7 +78,7 @@ const exec = async src => { const ss = P.feed(src); P.eat(gh, ss); assert.deepSt
   assert.deepStrictEqual(r.log, ['42 NO after'])                                                   // Promise 自动 await；undefined → NO
   r = await exec('[setTimeout (=>() [w@ "later"]) 5]\n[wait 30]\n(w@ "end")')
   assert.deepStrictEqual(r.log, ['later', 'end'])                                                  // JS 回调进 Lisp（共用 log）
-  r = await exec('(w@ (Promise.reject "boom"))'); assert.strictEqual(r.err, 'boom'); assert(r.x)   // rejected → 报错并指到调用节点
+  r = await exec('(w@ (Promise.reject "boom"))'); assert.strictEqual(r.err, 'boom'); assert(r.a != null && r.b > r.a)   // rejected → 报错并指到调用节点的源码区间
   r = await exec('(- o {a 1})\n o..[-> {b 2}]\n(w@ o (Math.max 1 5 3) (new Date 0).getTime)')
   assert.match(r.log[0], /^\{a 1 b 2\} 5 <builtin/)                                                // o..[-> …] 原地合并；Math.max；key 取出的方法绑定 this
   seen.length = 0; console.log = (...a) => seen.push(a)

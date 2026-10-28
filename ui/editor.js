@@ -2,6 +2,20 @@
 'use strict'
 const $ = s => document.querySelector(s)
 const h = (tag, cls, ...kids) => { const e = document.createElement(tag); if (cls) e.className = cls; for (const k of kids) if (k != null) e.append(k); return e }
+/* ---------- 事件：$.ev(elm, { click() { const { target } = $.event } }) ----------
+   map 的键是事件名，值是方法（this = 元素）；当前事件从 $.event 取（栈式，嵌套 dispatch 也正确）。
+   opts 原样传给 addEventListener（true = capture，{once} 等）；返回 off() 取消这一批。 */
+const evStack = []
+Object.defineProperty($, 'event', { get: () => evStack[evStack.length - 1] })
+$.ev = (elm, map, opts) => {
+  const offs = []
+  for (const t in map) {
+    const h = e => { evStack.push(e); try { map[t].call(elm, e) } finally { evStack.pop() } }
+    elm.addEventListener(t, h, opts)
+    offs.push(() => elm.removeEventListener(t, h, opts))
+  }
+  return () => { for (const f of offs) f() }
+}
 
 /* ---------- 编辑器：contenteditable 中只保留一个 Text 节点，Range 随编辑自动顺延 ---------- */
 class Editor {
@@ -9,11 +23,14 @@ class Editor {
     this.el = el; this.key = key; el.contentEditable = 'plaintext-only'; el.spellcheck = false; this.t = document.createTextNode(''); el.append(this.t); this.rmap = new Map
     // 换行/粘贴/拖放：浏览器可能插入 <br>/<div> 或拆分文本节点，迫使 fix() 重建（旧 Range 全部失效 → 高亮闪烁、光标归零）。
     // 改为直接在唯一的 Text 节点上 replaceData：live Range 按 DOM 规则自动顺延，旧高亮原地保留到重解析
-    el.addEventListener('beforeinput', e => {
-      const t = e.inputType
-      const s = t == 'insertParagraph' || t == 'insertLineBreak' ? '\n' : t == 'insertFromPaste' || t == 'insertFromDrop' ? e.dataTransfer?.getData('text/plain') ?? e.data : null
-      if (s == null || !this.fix()) return
-      e.preventDefault(); this.splice(s.replace(/\r\n?/g, '\n'))
+    const ed = this
+    $.ev(el, {
+      beforeinput() {
+        const { inputType: t, dataTransfer, data } = $.event
+        const s = t == 'insertParagraph' || t == 'insertLineBreak' ? '\n' : t == 'insertFromPaste' || t == 'insertFromDrop' ? dataTransfer?.getData('text/plain') ?? data : null
+        if (s == null || !ed.fix()) return
+        $.event.preventDefault(); ed.splice(s.replace(/\r\n?/g, '\n'))
+      },
     })
   }
   splice(s) {

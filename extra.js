@@ -1,5 +1,5 @@
 /* extra.js — 额外示例：INI / URL / CSS / SQL SELECT / 迷你脚本，连同它们的 :func。
-   由 ui.js 动态加载（#extra.js..CSS）：整份就是一句 (P) => { funcs, examples }，没有 IIFE / require / 全局。 */
+   由 ui/app.js 动态加载（#extra.js..CSS）：整份就是一句 (P) => { funcs, examples }，没有 IIFE / require / 全局。 */
 (P) => {
 const { T, parts } = P
 const dec = s => { try { return decodeURIComponent(s) } catch { return s } }

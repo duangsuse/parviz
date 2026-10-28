@@ -27,14 +27,17 @@ button.on{border-color:var(--G);color:var(--G)}
 #out .eitem:hover{background:#3a2a2e}
 #out .val b{color:var(--P)} #out .log{color:var(--G)} #out .warn{color:var(--Y)} #out .cm{color:var(--mut)}
 #main{flex:1;display:flex;min-height:0}
-#tree{flex:0 0 80%;overflow:auto;padding:8px 12px;border-right:1px solid var(--bd)}
+#panel{flex:0 0 80%;display:flex;flex-direction:column;min-width:0;border-right:1px solid var(--bd)}
+#tabs{display:flex;gap:4px;padding:4px 8px;border-bottom:1px solid var(--bd);flex:none}
+#tabs button{padding:0 8px;font-size:12px}
+#tree{flex:1;overflow:auto;padding:8px 12px}
 #side{flex:0 0 20%;display:flex;flex-direction:column;min-width:0}
 #side .hd{display:flex;gap:4px;padding:4px;border-bottom:1px solid var(--bd)}
 #side select{flex:1;min-width:0}
 #rules{flex:1;font-size:12px;white-space:pre;word-break:normal}
 #rerr{max-height:20%;overflow:auto;color:var(--R);font-size:11px;padding:2px 6px}
 #rerr div{cursor:pointer}
-/* 颜色表：BYGRP，CSS.highlights（见 #hlc，由 ui.js 生成）与树视图共用 */
+/* 颜色表：BYGRP，CSS.highlights（见 #hlc，由 ui/editor.js 的 Colors 生成）与树视图共用 */
 .B{color:var(--B)}.Y{color:var(--Y)}.G{color:var(--G)}.P{color:var(--P)}
 .R{color:var(--R)}.err{text-decoration:underline wavy var(--R);text-decoration-skip-ink:none}
 ::highlight(hov){background-color:rgba(97,175,239,.28)}
@@ -120,9 +123,12 @@ button.on{border-color:var(--G);color:var(--G)}
 <div id="out"></div>
 <div id="split" title="拖动调整上下面板"></div>
 <div id="main">
-  <div id="tree" class="tree"></div>
+  <div id="panel">
+    <div id="tabs"><button data-tab="cst" class="on" title="输入源码的 CST">CST</button><button data-tab="val" title="值 AST：脱糖后的调用树（与 CST 无关）">值</button><button data-tab="g" title="语法的编译结果">编译结果</button></div>
+    <div id="tree" class="tree"></div>
+  </div>
   <aside id="side">
-    <div class="hd"><select id="ex" title="地址栏 #xx.js..名字:~源码"></select><button id="bView" title="切换：输入的语法树 / 语法编译结果">编译结果？</button></div>
+    <div class="hd"><select id="ex" title="地址栏 #xx.js..名字:~源码"></select></div>
     <pre id="rules" class="ed"></pre>
     <div id="rerr"></div>
   </aside>
@@ -134,7 +140,12 @@ button.on{border-color:var(--G);color:var(--G)}
 <div id="mob"><button data-k="ArrowLeft">←</button><button data-k="ArrowRight">→</button><button data-k="ArrowRight" data-shift="1">⇧→</button><button data-k="Enter" data-ctrl="1">Ctrl⏎</button><button data-k="F8">F8</button><button data-k="Escape">Esc</button></div>
 <script src="parse.js"></script>
 <script src="lisp.js"></script>
-<script src="editor.js"></script>
-<script src="ui.js"></script>
+<script src="vendor/mithril.min.js"></script>
+<script src="ui/doc.js"></script>
+<script src="ui/tree.js"></script>
+<script src="ui/editor.js"></script>
+<script src="ui/sloc.js"></script>
+<script src="ui/console.js"></script>
+<script src="ui/app.js"></script>
 </body>
 </html>

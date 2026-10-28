@@ -193,3 +193,82 @@ Lisp的'#'注释也要放宽，支持 ■ #66ccff 和 ./path.wtf 这两种字面
 例子5. 的assign很奇怪，为什么不是 s.[-> {..}]                                                                                                                                                                                     
                                                                                                                                                                                                                                 
 例子4. 有许多可以变多项式的。 我对Lisp里 (> ) 语法的定义，是【里边有infix】，其他地方不能有。 现在可能写错了，一般加法都要用 (> A + B) 来写的                                                                                     
+
+
+> 7
+
+下一版本的新功能有这些，为它们提升解耦程度                                                                                                                                                                                       
+                                                                                                                                                                                                                                  
+- w@和Console等实现要能定位到sloc，就像error。 p5.html的editor和主页一样，能xref                                                                                                                                                 
+- p5的select demo要支持左侧Ctrl+E折叠的explorer，Chrome上可以绑定FSAA。未来可能支持不共存多Tab                                                                                                                                   
+- 调试器打印要能被Tweak检测到（可视化颜色等等），能改返回值，能F8暂停下一帧入口并F11逐行执行。 调试器在index页，也要能点函数名打断点                                                                                             
+- p5的vec2和color参数不能只硬编码，想办法让Lisp本身可以声明格式，包括WxH的另一组vec2现在也不能调                                                                                                                                 
+
+# grabug
+
+对 chrome:dino 的F12模拟
+
+```js
+// 每帧开始(或鼠标划过)时刷新一个亮点像素。 绘制单项后，若亮点已被遮盖，且栈顶段不在忽略列表中，断点并记录函数名。 (亮点位置=Ctrl+Shift+点击 or 悬停)
+grabug=(c={ctx:1})=>{
+const CANVAS_DIRTY=/^(fill|stroke|draw|putImageData)/,
+  rgb2hex=a=>a.slice(0,3).reduce((A,B)=> A+B.toString(16).padStart(2,'0'),'#'),
+  on=(e, dep=(k,f)=>(e.addEventListener(k,f), dep))=>dep,
+  hook=(g,k,f)=>{let f0=g[k]; g[k]=function(){let r=f0.apply(this,arguments); return f.apply(f0.bind(this),arguments)?? r}}
+
+if(!c.ctx.canvas) return hook(HTMLCanvasElement.prototype,'getContext', (i=>function(A,B, r){if(i++!=c.ctx){return}
+  B??={};B.willReadFrequently=true; grabug({...c, ctx: globalThis.gra=r=this(A,B)}); return r
+})(1))
+
+let g=c.ctx, x=0,y=0, fgHit='',
+  fgCookie=()=>{fgHit=rgb2hex(new Uint8Array(3).map(x=>Math.random()*255))},
+  z=0, fnIgn=(c.sdkFuns=new Set((c.sdkFuns||'').split('\n'))),kFn='',
+
+  stopTail=fnIgn.has('-stopTail'), cssHit=/filter:(.*)/.exec(c.cssHover)?.[1]?? 'brightness(0.8) sepia(1) hue-rotate(-134deg)',
+  debounce=0, F5=g.fillRect, e=g.canvas, ec=e.style;
+
+if(e) { on(e)
+  ('contextmenu',u=>{z=2; u.preventDefault()})
+  ('auxclick',u=>{z=3; fgCookie()})
+  ('mousemove',u=>{x=u.offsetX,y=u.offsetY; if(e)ec.translate=`${x-e.offsetWidth/2}px ${Math.max(20, y-20)}px`})
+  let hide
+  if(c.cssHover=='') {e=null; hide=()=>{ec.cursor='initial'}} else {
+    e.insertAdjacentHTML('afterEnd', '<tooltip  style="display: inline-block; border: 1px solid; transition: 70ms opacity ease-out; will-change:transform;pointer-events: none;">')
+    e=e.nextSibling, ec=e.style, hide=()=>{ec.opacity=0;debounce=1}
+  }
+  setInterval(hide, 250)
+}
+fgCookie();
+hook(g,'clearRect', ()=>{
+  let v0=g.fillStyle; g.fillStyle=fgHit;
+  F5.call(g, x,y, 1,1); g.fillStyle=v0
+  z=stopTail&&x==0? 0 : z
+})
+Object.keys(g.__proto__).map(kf=>{
+  if(!CANVAS_DIRTY.test(kf))return;
+  hook(g,kf, function(){
+    if(x==-1||fgHit==rgb2hex(g.getImageData(x,y,1,1).data))return;
+    if(!e){ec.cursor='crosshair'}
+    if(e||z!=0) { // or [no tooltip mode]
+      let v0=g.filter; g.filter=cssHit;
+      this.apply(0, arguments); g.filter=v0
+
+      let a=Error().stack.split('\n'), i=3, N=a.length
+      while(i<N) {if(!fnIgn.has(kFn=a[i].slice(7)))break; i++} if(i==N){return}
+
+      let fun=kFn.split(' ',1)[0]
+      if(!e) { console.info(fun) } else
+      if(debounce||z) { debounce=0; e.innerText=fun;ec.opacity=1; if(z)console.info(fun) }
+    }
+    if(z==2) { z=stopTail? z : 0; x=y=(stopTail? 0 : -1);  debugger } else
+    if(z==3) { z=0; fnIgn.add(kFn) }
+  })
+})
+}// grabug()
+
+grabug([{ctx:Runner.instance_.horizon.canvasCtx, cssHover:''},
+{ctx:Runner.instance_.horizon.canvasCtx, },
+{ctx:1,sdkFuns:'-stopTail', cssHover:'filter: invert(1) '}][1])
+
+;(_1=Runner.instance_).gameOver=()=>{_1.onKeyDown({keyCode:32, preventDefault (){} })}
+```

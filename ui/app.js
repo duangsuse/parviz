@@ -1,4 +1,4 @@
-/* ui.js — 编辑器（单文本节点 + CSS.highlights）、语法树/编译结果视图、sloc 全屏标注与 $n 标记、
+/* app.js — 调试器页面：编辑器（共享 ui/editor.js）、Doc 树与三个 Tab、sloc 全屏标注与 $n 标记、
    步进可视化、逐步执行、规则区、颜色表。F12：$1 输入流  $2 最后悬停  $3 语法  $4 最近结果  $5.. 标记 */
 'use strict'
 const { feed, eat, grammar, walk, examples, errsOf, Node } = P
@@ -10,7 +10,7 @@ const src = new Editor($('#src'), 'src'), rules = new Editor($('#rules'), 'rules
 
 /* ---------- 状态 ---------- */
 const S = {
-  meta: grammar(P.META), g: null, ss: null, rss: null, elOf: new Map, last: '', timer: 0, rtimer: 0,
+  meta: grammar(P.META), g: null, ss: null, rss: null, doc: null, vdoc: null, gdoc: null, elById: new Map, last: '', timer: 0, rtimer: 0,
   onedit: null, res: null, stale: false, view: 'cst', tool: 'eval', folds: new Set, unfold: new Set, down: false, pendingParse: false, collapse: true,
   srcSeen: null, srcSpec: null, zoom: null, midAt: 0,
 }
@@ -18,7 +18,7 @@ const status = t => $('#status').textContent = t
 const deepest = (root, i, ok = () => true) => { let best = null; walk(root, n => { if (n.a <= i && i < Math.max(n.b, n.a + 1)) { if (ok(n)) best = n; return } return false }); return best }
 const exactNode = (a, b) => { let r = null; if (S.ss?.tree) walk(S.ss.tree, n => { if (r) return false; if (n.a == a && n.b == b && n.k != 'top') { r = n; return false } if (n.b < a || n.a > b) return false }); return r }
 Object.assign(window, { ss: null, $1: null, $2: null, $3: null, $4: undefined })   // F12 槽位，见文件头
-const elFor = n => { for (let x = n; x; x = x.kids.length == 1 ? x.kids[0] : null) { const e = S.elOf.get(x); if (e) return e } }
+const elFor = n => { if (S.view != 'cst') return null; const id = S.doc?.idOf.get(n); return id == null ? null : S.elById.get(id) ?? null }
 const showRule = name => { const R = S.g?.rules.get(name); if (R) { rules.setSel(R.h.a, R.h.b); rules.scrollTo(R.h.a) } }
 
 // 占位实现：只留最近一次调用，写进 #out .val，并显示该词条被编辑了几遍
@@ -97,95 +97,6 @@ function wireFeed(ss, prev) {
   ss.onedit = prev && prev.onedit !== defaultOnedit ? prev.onedit : defaultOnedit
 }
 
-/* ---------- 语法树：[Tag ..] 照常，[-Tag] 已折叠，[.. ] 匿名列表；规则体为有序选择时 Tag 带分支 Val.A ---------- */
-function treeDOM(root, ss, o) {
-  let count = 0
-  const nd = (n, cls, kids, x) => { const e = h('span', 'nd ' + (cls || ''), ...kids); e.dataset.i = o.reg.push(n) - 1; if (x) e.dataset.x = o.regX.push(x) - 1; o.elOf?.set(n, e); return e }
-  const tok = (n, c, title) => { const e = nd(n, (c || '') + (n.err ? ' err' : ''), [n.text ?? ss.src.slice(n.a, n.b)]); e.title = title || n.err || ''; return e }
-  const box = (n, tag, kids, { x, tagc, anon, view } = {}) => {
-    const k = n.a + ':' + n.b + ':' + tag
-    const e = nd(n, 'box' + (view ? ' vw' : ''), [h('span', 'br', '['), h('span', 'tag' + (tag == '..' ? ' anon' : '') + (tagc ? ' ' + tagc : ''), tag), h('span', 'kids', ...kids), h('span', 'br', ']')], x)
-    e.dataset.k = k; if (anon) e.dataset.anon = 1
-    if (o.folds?.has(k)) e.classList.add('fold')
-    if (e.textContent.length > 90) e.classList.add('blk')
-    return e
-  }
-  const parTail = n => {
-    const k = 'par:' + n.a + ':' + n.b, pv = h('span', 'pv')
-    for (const p of [n.pair[0], n.pair[2]]) { const s = h('span', null, p < 0 ? ' "未闭合"' : ` "${ss.lc(p).join(':')}"`); if (p >= 0) s.dataset.pos = p; pv.append(s) }
-    const e = h('span', 'par' + (o.unfold?.has(k) ? '' : ' fold'), h('span', 'br', '['), h('span', 'tag', ':par'), pv, h('span', 'br', ']'))
-    e.dataset.k = k; return e
-  }
-  const leaf = (n, inh) => {  // 规则链 Lit→Num→123 折叠为一个词条
-    const names = []; let c = inh
-    while (n.k == 'rule') { names.push(n.r + (n.alt != null ? '.' + A(n.alt) : '')); c = colorOf(n, o.colors) || c; n = n.kids[0] }
-    if (n.kids.length && n.k != 'err') return null
-    return { n, c: colorOf(n, o.colors) || c, names }
-  }
-  // 只有一个子元素的规则不再套一层（规则名进 title），除非那个子元素是匿名列表
-  const one = ks => ks.length == 1 && !ks[0].classList.contains('par') && !(ks[0].dataset.anon && !ks[0].classList.contains('vw')) ? ks[0] : null
-  const viewEl = (v, n) => v instanceof Node ? node(v, null)
-    : box(v.node || n, v.tag, v.kids.map(k => k instanceof Node ? node(k, null) : viewEl(k, n)), { x: v.x, tagc: v.h && colorOf(v.h, o.colors), anon: v.tag == '..', view: true })
-  const node = (n, inh) => {
-    if (++count > o.max) return h('span', 'more', '…')
-    if (n.view) return viewEl(n.view, n)
-    const c = colorOf(n, o.colors) || inh
-    if (n.k == 'err') { const e = nd(n, 'R err', [n.b > n.a ? clip(ss.src.slice(n.a, n.b)) : '😡😡😡']); e.title = n.err; return e }
-    if (n.k == 'bin') return box(n, n.kids[1].text, [n.kids[0], n.kids[2]].flatMap(k => flat(k, c)))   // 算符表：[+ 左 右]
-    if (!n.kids.length) return tok(n, c)
-    if (n.k == 'rule') {
-      const lf = leaf(n, inh)
-      if (lf) return tok(lf.n, lf.c, lf.names.join(' → ') + (lf.n.err ? '\n' + lf.n.err : ''))
-      const tag = n.r + (n.alt != null ? '.' + A(n.alt) : ''), ks = flat(n.kids[0], c), e = one(ks)
-      if (e) { e.title = tag + ' → ' + e.title; return e }
-      return box(n, tag, ks)
-    }
-    return box(n, '..', flat(n, c), { anon: true })
-  }
-  const flat = (n, inh, inPar) => {   // inPar：作为 :par 的内层时，空列表 [..] 也显示（表示“空”）
-    if (n.view) return [viewEl(n.view, n)]
-    const c = colorOf(n, o.colors) || inh
-    switch (n.k) {
-      case 'seq': case 'opt': case 'top': return n.kids.flatMap(k => flat(k, c))
-      case 'join': case 'many': return !n.kids.length && !inPar ? [] : [box(n, '..', n.kids.filter(k => !k.sep || k.err).map(k => node(k, c)), { anon: true })]
-      case 'par': return [...n.kids.flatMap(k => flat(k, c, true)), parTail(n)]
-      case 'lit': return n.err ? [tok(n, c)] : []
-      default: return [node(n, inh)]
-    }
-  }
-  return h('div', 'tree', ...flat(root, null))
-}
-// 编译结果：每条规则实例显示为 [Name 组合子结构]；组合子同样写成调用形式
-function gDOM(g, o) {
-  const tk = (cls, t) => h('span', 'nd ' + cls, t)
-  const box = (tag, kids, k) => {
-    const e = h('span', 'nd box', h('span', 'br', '['), h('span', 'tag' + (tag == '..' ? ' anon' : ''), tag), h('span', 'kids', ...kids), h('span', 'br', ']'))
-    e.dataset.k = 'g:' + k; if (o.folds.has(e.dataset.k)) e.classList.add('fold')
-    if (e.textContent.length > 90) e.classList.add('blk')
-    return e
-  }
-  let id = 0
-  const OPS = { seq: '..', alt: '<', join: '+', many: '*', opt: '?', mark: ':setRecur', par: ':par' }
-  const pv = p => {
-    if (!p) return tk('', '∅')
-    if (p.kind == 'rule') { const e = tk('G', p.label); e.dataset.rule = p.label; return e }
-    if (p.kind == 'tok' || p.kind == 'lit') return tk('Y', p.label)
-    if (p.kind == 'kw') return tk('B', p.label)
-    if (p.kind == 'recur') return tk('P', 'Recur')
-    if (p.kind == 'kwset') return box(p.empty ? 'kwd -' : 'kwd', p.words.map(w => tk('B', w)), ++id)
-    if (p.kind == 'prec') return box('- 算符表', [pv(p.parts[0]), ...p.levels.flatMap((L, l) => [l ? tk('', ';') : null, ...L.map(pv)]).filter(Boolean)], ++id)   // 操作数 + 各级（; 分隔，越往后越紧）
-    return box(p.kind == 'fn' ? p.fname : OPS[p.kind], p.parts.filter(Boolean).map(pv), ++id)
-  }
-  const hd = h('div', 'gh', `起始 ${g.startName}  @skip ${g.some ? 'some ' : ''}${g.skip ? '/' + g.skip.source + '/' : 'none'}${g.walk ? '  @walk ' + g.walk : ''}  配对 ${g.pairs.map(p => p.join('')).join(' ') || '∅'}  颜色 ${Object.entries(g.colors).map(kv => kv.join('=')).join(' ') || '∅'}`)
-  const out = h('div', 'tree', hd)
-  for (const [key, I] of g.insts) {
-    const name = key.replace(/\[.*$/, ''), label = key.replace(/^(\w+)\[(.*)\]$/, '$1($2)')
-    const e = box(label, [pv(I.body)], key); e.querySelector('.tag').dataset.rule = name
-    out.append(e, h('br'))
-  }
-  for (const e of g.errs) out.append(h('div', 'R', `${e.msg}`))
-  return out
-}
 function setFold(el, folded) {
   el.classList.toggle('fold', folded); const k = el.dataset.k; if (!k) return
   if (el.classList.contains('par')) folded ? S.unfold.delete(k) : S.unfold.add(k); else folded ? S.folds.add(k) : S.folds.delete(k)
@@ -194,55 +105,68 @@ const toggleFold = el => { setFold(el, !el.classList.contains('fold')); Sloc.dra
 // 深度折叠展开：已折叠则连同所有子孙一起展开，否则连同所有子孙一起折叠（之后点 Tag 一层层展开）
 const deepFold = el => { const f = !el.classList.contains('fold'); for (const x of [el, ...el.querySelectorAll('.box')]) setFold(x, f); Sloc.draw() }
 function hookTree(host) {
-  host.addEventListener('mouseover', e => {
-    const r = e.target.closest('[data-rule]'); if (r) showRule(r.dataset.rule)
-    const t = e.target.closest('.nd[data-i]'); if (t) Sloc.hover(t.closest('.tree')._reg[t.dataset.i], t)
+  $.ev(host, {
+    mouseover() {
+      const { target } = $.event
+      const r = target.closest('[data-rule]'); if (r) showRule(r.dataset.rule)
+      const t = target.closest('.nd[data-id]'), it = t && nodeOf(t)
+      if (it && it.a >= 0) Sloc.hover(it.n || { a: it.a, b: it.b, k: itemLabel(it) }, t)
+    },
+    mouseout() { if ($.event.target.closest('.nd[data-id]')) Sloc.hover(null) },
+    mousedown() {
+      const { detail, button } = $.event
+      if (detail > 1 || button == 1) $.event.preventDefault()   // 双击不选中文字；中键不自动滚屏
+      if (button == 1) S.midAt = performance.now()               // 记下中键：Chromium 会把 PRIMARY 选区粘进聚焦的输入区
+    },
+    mouseup() { if ($.event.button == 1) $.event.preventDefault() },
+    // 中键：只看这棵子树（铺满树面板）；右键：回到整棵树
+    auxclick() {
+      const { button, target } = $.event
+      if (button != 1) return
+      const t = target.closest('.nd[data-id]'), nx = t && nodeOf(t)
+      if (!nx?.n) return
+      $.event.preventDefault(); zoomTo(nx.n)
+    },
+    contextmenu() { if (S.zoom) { $.event.preventDefault(); zoomTo(null) } },
+    // 单击：只有折叠工具才折叠（括号、Tag 也一样），其他按当前工具；:par 尾巴总是可展开
+    click() {
+      const { detail, target } = $.event
+      if (detail > 1) return
+      const p = target.closest('[data-pos]'); if (p && !p.closest('.fold')) { goto(+p.dataset.pos, +p.dataset.pos + 1); return }
+      const pr = target.closest('.par'); if (pr) { toggleFold(pr); return }
+      const t = target.closest('.nd'); if (!t) return
+      if (foldTool(t)) return
+      const nx = nodeOf(t); if (nx) useTool(nx)
+    },
+    // 双击 = 标记：折叠工具先撤销第一下；标记工具第一下已标过
+    dblclick() {
+      const { target } = $.event
+      const t = target.closest('.nd'); if (!t || target.closest('.par')) return
+      foldTool(t); if (S.tool == 'mark' || S.tool == 'line') return
+      const nx = nodeOf(t); if (nx && S.ss) { Marks.toggle(nx.n || (nx.a >= 0 ? [nx.a, nx.b] : null)); if (nx.a >= 0) goto(nx.a, nx.b, true) }
+    },
+    scroll() { Sloc.draw() },
   })
-  host.addEventListener('mouseout', e => { if (e.target.closest('.nd[data-i]')) Sloc.hover(null) })
-  host.addEventListener('mousedown', e => {
-    if (e.detail > 1 || e.button == 1) e.preventDefault()   // 双击不选中文字；中键不自动滚屏
-    if (e.button == 1) S.midAt = performance.now()          // 记下中键：Chromium 会把 PRIMARY 选区粘进聚焦的输入区
-  })
-  host.addEventListener('mouseup', e => { if (e.button == 1) e.preventDefault() })
-  // 中键：只看这棵子树（铺满树面板）；右键：回到整棵树
-  host.addEventListener('auxclick', e => {
-    if (e.button != 1) return
-    const t = e.target.closest('.nd[data-i]'), nx = t && nodeOf(t)
-    if (!nx) return
-    e.preventDefault(); zoomTo(nx[0])
-  })
-  host.addEventListener('contextmenu', e => { if (S.zoom) { e.preventDefault(); zoomTo(null) } })
-  // 单击：只有折叠工具才折叠（括号、Tag 也一样），其他按当前工具；:par 尾巴总是可展开
-  host.addEventListener('click', e => {
-    if (e.detail > 1) return
-    const p = e.target.closest('[data-pos]'); if (p && !p.closest('.fold')) { goto(+p.dataset.pos, +p.dataset.pos + 1); return }
-    const pr = e.target.closest('.par'); if (pr) { toggleFold(pr); return }
-    const t = e.target.closest('.nd'); if (!t) return
-    if (foldTool(t)) return
-    const nx = nodeOf(t); if (nx) useTool(...nx)
-  })
-  // 双击 = 标记：折叠工具先撤销第一下；标记工具第一下已标过
-  host.addEventListener('dblclick', e => {
-    const t = e.target.closest('.nd'); if (!t || e.target.closest('.par')) return
-    foldTool(t); if (S.tool == 'mark' || S.tool == 'line') return
-    const nx = nodeOf(t); if (nx && S.ss) { Marks.toggle(nx[0]); goto(nx[0].a, nx[0].b, true) }
-  })
-  host.addEventListener('scroll', () => Sloc.draw())
 }
 function renderTree() {
-  const host = $('#tree'), st = host.scrollTop, ss = S.ss
-  host.textContent = ''; S.elOf = new Map
-  $('#bView').classList.toggle('on', S.view == 'g')
-  if (S.view == 'g') { if (S.g) host.append(gDOM(S.g, S)) }
-  else if (ss?.tree) {
-    const o = { reg: [], regX: [], elOf: S.elOf, folds: S.folds, unfold: S.unfold, colors: S.g.colors, max: 6000 }
-    const t = treeDOM(S.zoom || ss.tree, ss, o); t._reg = o.reg; t._regX = o.regX; host.append(t)
-  }
+  const host = $('#tree'), st = host.scrollTop
+  const d = viewDoc(), root = S.view == 'cst' && S.zoom ? S.doc?.idOf.get(S.zoom) ?? null : null
+  if (!d) { m.render(host, m('div.tree')); S.elById = new Map; return }
+  const box = Tree.render(host, d, { folds: S.folds, unfold: S.unfold, root })
+  box._doc = d
+  S.elById = new Map([...host.querySelectorAll('[data-id]')].map(e => [+e.dataset.id, e]))
   host.scrollTop = st
 }
-
-const nodeOf = t => { const tr = t.closest('.tree'); return t.dataset.i == null || !tr?._reg ? null : [tr._reg[t.dataset.i], t.dataset.x != null ? tr._regX[t.dataset.x] : null] }
-// 子树缩放：树面板只渲染这个节点；右键（contextmenu）回到根
+const viewDoc = () => S.view == 'g' ? S.gdoc : S.view == 'val' ? S.vdoc : S.doc
+// 点击/悬停：Doc 节点 → 外部对象（CST 或值）；payload 只在这里读
+const nodeOf = t => {
+  const host = t.closest('.tree'), d = host?._doc, raw = t.dataset?.id
+  if (!d || raw == null) return null
+  const id = +raw, obj = d.payload[id] >= 0 ? d.objs[d.payload[id]] : null, cst = d.flavor == 'cst'
+  return { d, id, n: cst ? obj : null, v: cst ? null : obj, a: d.a[id], b: d.b[id] }
+}
+const itemLabel = it => it.n ? (it.n.r || it.n.k || '') : (it.d.str[it.d.tag[it.id]] || '')
+// 子树缩放：树面板只渲染这个 CST 节点的子树；右键（contextmenu）回到根
 function zoomTo(n) {
   S.zoom = n
   renderTree(); Marks.changed()
@@ -254,22 +178,26 @@ const foldTool = t => {
   const b = t.closest('.box'); if (b) (S.tool == 'deep' ? deepFold : toggleFold)(b); return true
 }
 /* ---------- 点击节点的工具（双击总是标记；1-6 切换） ---------- */
-function useTool(n, x) {
-  if (!S.ss) return
-  if (S.tool == 'mark' || S.tool == 'line') { Marks.toggle(n, S.tool == 'line'); goto(n.a, n.b, true) }
+function useTool(it) {
+  if (!S.ss || !it) return
+  const span = it.a >= 0
+  if (S.tool == 'mark' || S.tool == 'line') { Marks.toggle(it.n || (span ? [it.a, it.b] : null), S.tool == 'line'); if (span) goto(it.a, it.b, true) }
   else if (S.tool == 'clear') S.ss.marks = []
-  else if (S.tool == 'eval') evalNode(n, x)
+  else if (S.tool == 'eval') evalNode(it)
 }
-function evalNode(n, x) {
-  const ast = x || n.v, w = S.g.walk && P.walkers[S.g.walk]
-  if (w && P.isT(ast) && P.isT(S.ss.value)) setResult({ run: w.node(ast, S.ss.value), show: w.show, label: `独立求值 ${S.ss.sloc(n)}` })
-  else setResult({ v: n.v, label: `节点值 ${S.ss.sloc(n)}` })
+function evalNode(it) {
+  const ast = it.n ? it.n.v : it.v, w = S.g.walk && P.walkers[S.g.walk]
+  const where = it.a >= 0 ? S.ss.sloc(it.a) : '（合成节点）'
+  if (w && P.isT(ast) && P.isT(S.ss.value)) setResult({ run: w.node(ast, S.ss.value), show: w.show, label: `独立求值 ${where}` })
+  else setResult({ v: ast, label: `节点值 ${where}` })
 }
 const toolSel = $('#tool')
 toolSel.onchange = () => { S.tool = toolSel.value; status('工具：' + toolSel.selectedOptions[0].text) }
-toolSel.addEventListener('wheel', e => {
-  e.preventDefault(); const n = toolSel.options.length
-  toolSel.selectedIndex = (toolSel.selectedIndex + (e.deltaY > 0 ? 1 : -1) + n) % n; toolSel.onchange()
+$.ev(toolSel, {
+  wheel() {
+    $.event.preventDefault(); const n = toolSel.options.length
+    toolSel.selectedIndex = (toolSel.selectedIndex + ($.event.deltaY > 0 ? 1 : -1) + n) % n; toolSel.onchange()
+  },
 }, { passive: false })
 
 /* ---------- sloc：全屏打标、连线、goto ---------- */
@@ -281,35 +209,8 @@ const Sloc = {
     if (n && S.ss) { window.$2 = n; status(`$2 = ${n.r || n.k} ${S.ss.sloc(n)}${n.err ? '  ' + n.err : ''}`) }
     this.draw()
   },
-  label(txt, r, cls, on) { const m = h('div', 'mk ' + (cls || ''), txt); m.style.left = r.left + 'px'; m.style.top = r.top + 'px'; Object.assign(m, on); this.mks.append(m); return m },
-  path(a, b, cls, ref) {  // a、b 连线：两端各落在朝向对方的边上；cls 'ar' 时箭头扎进 a 那条边；ref：同编辑区内的引用箭头
-    const mid = r => ({ x: r.left + r.width / 2, y: r.top + r.height / 2 })
-    const edge = (r, dx, dy) => {   // r 上朝 (dx,dy) 的边：点 + 外法线（竖直方向略占优）
-      if (Math.abs(dy) > Math.abs(dx) * .5) return { p: { x: r.left + Math.min(r.width, 30) / 2, y: dy > 0 ? r.bottom : r.top }, n: { x: 0, y: dy > 0 ? 1 : -1 } }
-      return { p: { x: dx > 0 ? r.right : r.left, y: r.top + r.height / 2 }, n: { x: dx > 0 ? 1 : -1, y: 0 } }
-    }
-    const ac = mid(a), bc = mid(b)
-    const A = edge(a, bc.x - ac.x, bc.y - ac.y), B = edge(b, ac.x - bc.x, ac.y - bc.y)   // A = 箭头那端
-    // 跨面板：按距离外推 12–60px；同一编辑区内的引用（ref）：控制点只取纵向间距的一半，不跨出两行之外
-    const d = ref ? Math.abs(ac.y - bc.y) / 2 : Math.min(140, Math.max(12, Math.hypot(A.p.x - B.p.x, A.p.y - B.p.y) / 2.5))
-    const c1 = { x: B.p.x + B.n.x * d, y: B.p.y + B.n.y * d }, c2 = { x: A.p.x + A.n.x * d, y: A.p.y + A.n.y * d }
-    const ar = cls == 'ar', L = 12, W = 11
-    const tip = A.p, base = { x: tip.x + A.n.x * L, y: tip.y + A.n.y * L }   // 三角底在 a 外面，尖端扎进边里
-    const q = { x: -A.n.y * W / 2, y: A.n.x * W / 2 }
-    const flat = ar && Math.abs(ac.y - bc.y) < Math.max(a.height || 16, b.height || 16) * .5   // 同一行：横线会压着代码，只留箭头
-    if (!flat) {
-      const p = document.createElementNS('http://www.w3.org/2000/svg', 'path')
-      p.setAttribute('d', `M${B.p.x},${B.p.y} C${c1.x},${c1.y} ${c2.x},${c2.y} ${(ar ? base : tip).x},${(ar ? base : tip).y}`)
-      if (cls) p.setAttribute('class', cls)
-      this.svg.append(p)
-    }
-    if (ar) {
-      const hd = document.createElementNS('http://www.w3.org/2000/svg', 'path')
-      hd.setAttribute('d', `M${tip.x},${tip.y} L${base.x + q.x},${base.y + q.y} L${base.x - q.x},${base.y - q.y}Z`)
-      hd.setAttribute('class', 'ah')
-      this.svg.append(hd)
-    }
-  },
+  label(txt, r, cls, on) { return SL.label(this.mks, txt, r, cls, on) },
+  path(a, b, cls, ref) { SL.path(this.svg, a, b, cls, ref) },
   inView(el, r) { const c = el.getBoundingClientRect(); return r.bottom > c.top && r.top < c.bottom && r.right > c.left && r.left < c.right },
   draw() {
     this.mks.textContent = ''; this.svg.textContent = ''
@@ -350,44 +251,49 @@ const fmt = (v, show) => {
   try { return clip(JSON.stringify(v) ?? String(v), 3000) } catch { return String(v) }
 }
 function setResult(res) { S.res = res; window.$4 = res.run ? (res.run.err ? undefined : res.run.value) : res.v; renderOut() }
-const textEnd = el => {   // 错误行文字右端的零宽矩形：连线从右侧引出
-  const rg = document.createRange(); rg.selectNodeContents(el)
-  const rs = rg.getClientRects(), q = rs[rs.length - 1]
-  return q ? { left: q.right, right: q.right, top: q.top, bottom: q.bottom, width: 0, height: q.height } : el.getBoundingClientRect()
-}
+const conUI = Console.mount($('#out'), {
+  open: s => goto(s.a, s.b),
+  hover: (s, el) => { Sloc.hov = { from: SL.textEnd(el), to: src.rect(s.a, Math.max(s.b, s.a + 1)), cls: 'e' }; HL.set('hov', { hov: [src.range(s.a, Math.max(s.b, s.a + 1))] }); Sloc.draw() },
+  leave: () => { if (Sloc.hov?.from) Sloc.hover(null) },
+})
 function renderOut() {
-  const out = $('#out'), ss = S.ss; out.textContent = ''
+  const ss = S.ss, items = []
   if (Sloc.hov?.from) Sloc.hover(null)   // 输出重排，旧的错误连线作废
-  out.append(h('div', 'cm', '// try ss.onedit=alert'))
-  ss?.errs.forEach((e, k) => {
-    const it = h('span', 'eitem', `E${k + 1} ${ss.sloc(e.a)}  ${e.msg}`)
-    it.onclick = () => goto(e.a, e.b)
-    it.onmouseenter = () => { Sloc.hov = { from: textEnd(it), to: src.rect(e.a, Math.max(e.b, e.a + 1)), cls: 'e' }; HL.set('hov', { hov: [src.range(e.a, Math.max(e.b, e.a + 1))] }); Sloc.draw() }
-    out.append(it)
-  })
-  const r = S.res, oe = h('span', 'oe cm', S.onedit ? `   // ${S.onedit}` : '')
+  items.push({ cls: 'cm', text: '// try ss.onedit=alert' })
+  if (!S.g?.start) {   // 文法本身没编译出来：显示编译错误，别再显示上一份语法的解析结果
+    ;(S.g?.errs || []).forEach((e, k) => items.push({ cls: 'eitem', text: `文法 ${k + 1} ${e.msg}` }))
+    items.push({ cls: 'val', note: '语法未编译成功，未解析源码' })
+    return conUI.set(items)
+  }
+  ss?.errs.forEach((e, k) => items.push({ cls: 'eitem', text: `E${k + 1} ${ss.sloc(e.a)}  ${e.msg}`, span: e }))
+  const r = S.res, oe = S.onedit ? `   // ${S.onedit}` : ''
   if (r?.run) {
-    for (const l of r.run.log) out.append(h('div', l.out != null ? 'log' : 'warn', l.out ?? `⚠ ${l.warn}`))
-    if (r.run.err) { const e = h('span', 'eitem', `求值错误：${r.run.err}`), xn = r.run.x?.node; if (xn) e.onclick = () => goto(xn.a, xn.b); out.append(e, h('div', 'val', oe)) }
-    else out.append(h('div', 'val', h('b', null, '$4'), ' = ' + fmt(r.run.value, r.show), h('span', 'cm', `   // ${r.label}`), oe))
-  } else if (r) out.append(h('div', 'val', h('b', null, '$4'), ' = ' + fmt(r.v), r.label ? h('span', 'cm', `   // ${r.label}`) : null, oe))
-  else out.append(h('div', 'val', oe))
+    for (const l of r.run.log) items.push(l.out != null ? { cls: 'log', text: l.out } : { cls: 'warn', text: `⚠ ${l.warn}` })
+    if (r.run.err) {
+      const sp = r.run.a != null ? { a: r.run.a, b: r.run.b } : null
+      items.push({ cls: 'eitem', text: `求值错误：${r.run.err}`, span: sp })
+      items.push({ cls: 'val', note: oe })
+    } else items.push({ cls: 'val', lead: '$4', text: ' = ' + fmt(r.run.value, r.show), note: `   // ${r.label}` + oe })
+  } else if (r) items.push({ cls: 'val', lead: '$4', text: ' = ' + fmt(r.v), note: (r.label ? `   // ${r.label}` : '') + oe })
+  else items.push({ cls: 'val', note: oe })
+  conUI.set(items)
 }
 
 /* ---------- 解析 / 执行 ---------- */
-$('#out').addEventListener('mouseleave', () => { if (Sloc.hov?.from) Sloc.hover(null) })   // 指针离开输出区才收起错误连线
+$.ev($('#out'), { mouseleave() { if (Sloc.hov?.from) Sloc.hover(null) } })   // 指针离开输出区才收起错误连线
 
 function parse() {
   clearTimeout(S.timer); S.timer = 0; Step.stop(); EvStep.stop()
   const focused = document.activeElement === src.el, sel = focused ? src.caret() : null
   src.fix(); S.last = src.value
-  if (!S.g?.start) { status('语法未编译成功'); renderTree(); return }
+  if (!S.g?.start) { status('语法未编译成功'); S.res = null; renderOut(); renderTree(); return }
   const prev = S.ss, ss = feed(src.value)
   wireFeed(ss, prev)
   const t0 = performance.now(); let v
-  try { v = eat(S.g, ss) } catch (e) { status('解析异常：' + e.message); console.error(e); return }
+  try { v = eat(S.g, ss) } catch (e) { status('解析异常：' + e.message); console.error(e); S.res = null; renderOut(); return }
   S.ss = ss; S.stale = false; window.ss = window.$1 = ss; window.$3 = S.g; S.zoom = null   // 新树：子树缩放失效
   Sloc.rev = Sloc.ref = null   // 节点换了，反查箭头作废
+  S.doc = Doc.cst(ss, S.g); S.vdoc = Doc.val(ss)
   paint(src, ss.tree, S.g.colors); renderTree(); Marks.changed(); Edits.sync(ss)
   setResult({ v, label: ` ${(performance.now() - t0).toFixed(1)}ms · ${ss.errs.length} 个错误` }); syncHash()
   if (sel && document.activeElement !== src.el) { src.el.focus(); src.setSel(...sel) }   // 结构性编辑后恢复光标
@@ -430,23 +336,28 @@ function tryShift(old, now) {
   const inPath = new Set(T ? [T, ...path] : [])
   walk(root, n => { const sa = n.a >= b && !inPath.has(n); if (sa) n.a += d; if (n.b > a || inPath.has(n) || sa) n.b += d })
   root.b = now.length; ss.src = now; ss.errs = errsOf(root); S.stale = true
-  if (T) { T.text = newT; const r = src.rmap.get(T); if (r) { r.setStart(src.t, T.a); r.setEnd(src.t, T.b) } }
+  if (T) { T.text = newT; const r = src.rmap.get(T); if (r) { r.setStart(src.t, T.a); r.setEnd(src.t, T.b) } }   // 先更新词条文本，再重建 Doc
+  S.doc = Doc.cst(ss, S.g); S.vdoc = Doc.val(ss)
   Edits.sync(ss)
   HL.flush(); renderTree(); Marks.changed(); renderOut(); syncHash()
   status(`顺延 ${d > 0 ? '+' : ''}${d} @${ss.sloc(a)}`)
   return true
 }
-src.el.addEventListener('input', () => {
-  if (Step.on) Step.stop()
-  const ok = src.fix(), old = S.last, now = src.value; S.last = now
-  if (!(ok && tryShift(old, now))) { clearTimeout(S.timer); S.timer = setTimeout(requestParse, 700) }   // 结构性编辑：停顿后重解析，旧高亮保留到新结果一次性替换
-  Comp.update()
+$.ev(src.el, {
+  input() {
+    if (Step.on) Step.stop()
+    const ok = src.fix(), old = S.last, now = src.value; S.last = now
+    if (!(ok && tryShift(old, now))) { clearTimeout(S.timer); S.timer = setTimeout(requestParse, 700) }   // 结构性编辑：停顿后重解析，旧高亮保留到新结果一次性替换
+    Comp.update()
+  },
 })
 // 鼠标按下期间（如正在点树节点）不重建树：推迟到这次点击处理完
 const requestParse = () => { if (S.down) S.pendingParse = true; else parse() }
-src.el.addEventListener('blur', () => { if (!Step.on && (S.timer || S.stale || S.ss?.src !== src.value)) requestParse() })   // 失焦自动解析
-document.addEventListener('pointerdown', () => { S.down = true }, true)
-document.addEventListener('pointerup', () => { S.down = false; if (S.pendingParse) { S.pendingParse = false; setTimeout(parse, 0) } }, true)
+$.ev(src.el, { blur() { if (!Step.on && (S.timer || S.stale || S.ss?.src !== src.value)) requestParse() } })   // 失焦自动解析
+$.ev(document, {
+  pointerdown() { S.down = true },
+  pointerup() { S.down = false; if (S.pendingParse) { S.pendingParse = false; setTimeout(parse, 0) } },
+}, true)
 
 /* ---------- 规则区：自己给自己写的语法（META）负责高亮 ---------- */
 function paintRules() {
@@ -460,12 +371,17 @@ function paintRules() {
 }
 function compile() {
   clearTimeout(S.rtimer)
-  rules.fix(); S.g = grammar(rules.value); window.$3 = S.g; Edits.seq = null
+  rules.fix(); S.g = grammar(rules.value); window.$3 = S.g; S.gdoc = Doc.gram(S.g); Edits.seq = null
   paintRules()
-  if (S.g.start) parse(); else { status(`语法错误 ${S.g.errs.length} 处`); renderTree() }
+  if (S.g.start) parse(); else { status(`语法错误 ${S.g.errs.length} 处`); S.res = null; renderOut(); renderTree() }
 }
-rules.el.addEventListener('input', () => { rules.fix(); clearTimeout(S.rtimer); S.rtimer = setTimeout(compile, 600) })
-$('#bView').onclick = () => { S.view = S.view == 'g' ? 'cst' : 'g'; renderTree(); Marks.changed() }
+$.ev(rules.el, { input() { rules.fix(); clearTimeout(S.rtimer); S.rtimer = setTimeout(compile, 600) } })
+const tabs = document.querySelectorAll('#tabs button')
+for (const b of tabs) b.onclick = () => {
+  S.view = b.dataset.tab
+  for (const x of tabs) x.classList.toggle('on', x == b)
+  renderTree(); Marks.changed()
+}
 
 /* ---------- 步进：聚焦任意位置按 →，像 parser 一样往右扫；← 回溯 ---------- */
 const menu = $('#menu'), caretEl = $('#caret')
@@ -479,17 +395,20 @@ function popup(pos, fill, ch) {
 }
 // 步进用的是独立的一次解析：按区间（优先同名规则）在主语法树里找对应元素；被折叠时退到最近的可见祖先
 function astEl(a, b, r) {
-  let best = null, br = null, cover = null
-  if (S.ss?.tree) walk(S.ss.tree, n => {
-    if (n.b < a || n.a > b) return false
-    const e = S.elOf.get(n); if (!e) return
-    if (n.a == a && n.b == b && (!best || (n.r == r && br != r))) { best = e; br = n.r }
-    if (n.a <= a && b <= n.b) cover = e
-  })
-  let el = best || cover
+  const d = S.doc; if (!d || S.view != 'cst') return null
+  let best = -1, cover = -1, cs = Infinity
+  for (let i = 0; i < d.a.length; i++) {
+    if (d.b[i] < a || d.a[i] > b) continue
+    if (d.a[i] == a && d.b[i] == b && (best < 0 || d.str[d.rule[i]] == r)) best = i
+    const sp = d.b[i] - d.a[i]
+    if (d.a[i] <= a && b <= d.b[i] && sp < cs) { cover = i; cs = sp }
+  }
+  let el = best >= 0 ? S.elById.get(best) : cover >= 0 ? S.elById.get(cover) : null
   while (el && !el.offsetParent) el = el.parentElement?.closest('.nd')
   return el
 }
+// 栈帧：内→外（旧 e.st 的 [...].reverse() 形状）
+const stOf = (e, F) => { const r = []; for (let i = e.f; i >= 0; i = F[i].up) r.push(F[i]); return r }
 const preview = (s, a, b = a + 24) => clip(s.slice(a, b).replace(/\s*\n\s*/g, '⏎'), 14)   // 原文前缀，不转义
 const Step = {
   on: false, ev: [], vis: [], main: [], i: 0, all: false,
@@ -503,7 +422,7 @@ const Step = {
     ev.forEach((e, k) => { if (e.t == 'alt') hide[k] = 1; else if (e.t == 'in') st.push(k); else { const s = st.pop(); if (!e.ok && s != null) hide.fill(1, s, k + 1) } })
     const vis = []; for (let k = 0; k < ev.length; k++) if (!hide[k]) vis.push(k)
     if (!vis.length) return false
-    Object.assign(this, { ss, ev, vis, on: true, all }); this.recalc()
+    Object.assign(this, { ss, ev, vis, on: true, all, F: ss.frames }); this.recalc()
     // 起点随按键：Shift（逐个事件）取光标后的第一个事件；否则取第一个折叠后保留的事件
     const i = all ? vis.findIndex(k => ev[k].a >= c) : vis.findIndex((k, j) => this.main[j] && ev[k].a >= c)
     this.i = i < 0 ? vis.length - 1 : i
@@ -513,7 +432,8 @@ const Step = {
   // 连续的返回只停在第一个
   recalc() {
     const ev = this.ev, vis = this.vis, E = j => ev[vis[j]]
-    const ruleIn = j => E(j)?.t == 'in' && !E(j).st.at(-1)?.tok, tokIn = j => E(j)?.t == 'in' && !!E(j).st.at(-1)?.tok
+    const top = e => e && e.f >= 0 ? this.F[e.f] : null
+    const ruleIn = j => E(j)?.t == 'in' && !top(E(j))?.tok, tokIn = j => E(j)?.t == 'in' && !!top(E(j))?.tok
     const leaf = j => ruleIn(j) && tokIn(j + 1)
     this.main = vis.map((k, j) => {
       if (!S.collapse) return true
@@ -547,7 +467,7 @@ const Step = {
   },
   show() {
     const e = this.cur(), ss = this.ss, pos = this.pos(e)
-    const top = [...e.st].reverse().find(f => !f.tok), hl = {}
+    const top = stOf(e, this.F).find(f => !f.tok), hl = {}
     if (top && pos > top.a) hl[e.ch ? 'stepCh' : 'step'] = [src.range(top.a, pos)]
     if (e.t == 'out' && e.b > e.a) hl.eat = [src.range(e.a, e.b)]
     HL.set('step', hl); src.scrollTo(pos)
@@ -568,7 +488,7 @@ const Step = {
       }
       // 栈层顺序是从内到外，故同前缀的层必然相邻：#coll 开启时同前缀只留最顶上一项
       const seen = new Set()
-      ;[...e.st].reverse().forEach((f, k) => {
+      stOf(e, this.F).forEach((f, k) => {
         const pv = preview(ss.src, f.a)
         if (S.collapse) { if (seen.has(pv)) return; seen.add(pv) }
         const d = h('div', 'fr' + (k == 0 ? ' top' : ''), h('span', null, pv), h('span', 'sl', ss.sloc(f.a)))
@@ -585,14 +505,14 @@ $('#coll').onchange = e => { S.collapse = e.target.checked; if (Step.on) { Step.
 // 返回 { bp: lambda 节点→标记序号, moved: 改作函数断点的标记序号 }
 function fnBreaks(prog, marks) {
   const bp = new Map, moved = new Set; if (!marks.length) return { bp, moved }
-  const at = (n, m) => n && m.a == n.a && m.b == n.b
+  const at = (n, m) => n && n.a >= 0 && m.a == n.a && m.b == n.b
   const go = x => {
     if (!P.isT(x)) return
     if (x[0] == '=' && P.isT(x[2]) && x[2][0] == '=>') {
       // 标记可能落在包着引用词条的外层节点上（同区间的 seq/规则）：在其子树里找同区间且带 .def 的节点
       const nm = x.ns[0], d = m => { let r = null; if (m.n) walk(m.n, y => { if (r || y.b < m.a || y.a > m.b) return false; if (y.def && y.a == m.a && y.b == m.b) r = y.def }); return r }
-      const k = marks.findIndex(m => at(x.node, m) || at(nm, m) || (d(m) && nm && nm.a <= d(m).a && d(m).b <= nm.b))
-      if (k >= 0) { moved.add(k); bp.set(x[2].node, k) }
+      const k = marks.findIndex(m => at(x[2], m) || at(x.node, m) || at(nm, m) || (d(m) && nm && nm.a <= d(m).a && d(m).b <= nm.b))
+      if (k >= 0) { moved.add(k); bp.set(x[2].a + ':' + x[2].b, k) }   // 函数断点按源码范围记
     }
     for (const y of x.slice(1)) go(y)
   }
@@ -609,15 +529,16 @@ const EvStep = {
   // 只在：标记了 $n 的节点、调用返回（连实参带返回值）、判断 处中断；名字解析与函数进入不停
   next() {
     if (!this.it && !this.start()) return
-    const marks = Marks.list(), mk = n => n ? marks.findIndex(m => m.n === n || (m.a == n.a && m.b == n.b)) : -1, B = this.brk()
+    const marks = Marks.list(), mk = (a, b) => a == null ? -1 : marks.findIndex(m => m.a == a && m.b == b), B = this.brk()
     const { bp, moved } = fnBreaks(S.ss.value, marks)
     for (let g = 0; g < 1e6; g++) {
       const r = this.it.next(); this.n++
       if (r.done) { const n = this.n; this.stop(); setResult({ run: r.value, show: this.w.show, label: `逐步执行完毕（${n} 步）` }); return }
-      const e = r.value; let k = mk(e.n)
+      const e = r.value; let k = mk(e.a, e.b)
       if (moved.has(k)) k = -1                                                            // 定义/函数名本身不停
-      if (k < 0 && e.ph == 'ret' && e.f?.t == 'fn' && bp.has(e.f.node)) k = bp.get(e.f.node)   // 改停在该函数返回时
-      if (k >= 0 || (e.n && ((e.ph == 'if' && B.dec) || (e.ph == 'ret' && B.re?.test(this.w.fname(e.f)))))) return this.show(e, k)
+      const fk = e.f?.t == 'fn' && e.f.a >= 0 ? e.f.a + ':' + e.f.b : null
+      if (k < 0 && e.ph == 'ret' && fk && bp.has(fk)) k = bp.get(fk)                      // 改停在该函数返回时
+      if (k >= 0 || (e.a != null && ((e.ph == 'if' && B.dec) || (e.ph == 'ret' && B.re?.test(this.w.fname(e.f)))))) return this.show(e, k)
     }
   },
   // #brk：以 | 分隔；单独的 ? 表示判断，其余合成正则整体匹配函数名（默认 ?|.* 即所有判断与所有返回）
@@ -627,14 +548,14 @@ const EvStep = {
     return { dec: alts.includes('?'), re }
   },
   show(e, k) {
-    const n = e.n, sh = this.w.show, tag = k >= 0 ? `$${5 + k} ` : ''
+    const a = e.a, b = e.b, sh = this.w.show, tag = k >= 0 ? `$${5 + k} ` : ''
     const txt = e.ph == 'ret' ? `[${this.w.fname(e.f)}${e.args.map(a => ' ' + sh(a, 1)).join('')}] ⇒ ${sh(e.v, 1)}`
       : e.ph == 'if' ? `? ${sh(e.c, 1)} → ${e.t ? '真分支' : '假分支'}`
       : e.ph == 'in' ? `⇢ 进入` : `⇠ ${sh(e.v, 1)}`
-    HL.set('ev', { ev: [src.range(n.a, n.b)] }); src.scrollTo(n.a)
-    popup(e.ph == 'in' ? n.a : n.b, m => {
+    if (a != null) { HL.set('ev', { ev: [src.range(a, Math.max(b, a + 1))] }); src.scrollTo(a) }
+    popup(a ?? b ?? 0, m => {
       m.append(h('div', 'hd', h('b', null, tag + txt), `  总步骤 #${this.n}`))
-      m.append(h('div', 'fr', h('span', null, clip(S.ss.src.slice(n.a, n.b).replace(/\s+/g, ' '), 40)), h('span', 'sl', S.ss.sloc(n))))
+      m.append(h('div', 'fr', h('span', null, a != null ? clip(S.ss.src.slice(a, b).replace(/\s+/g, ' '), 40) : ''), h('span', 'sl', S.ss.sloc(a ?? 0))))
     })
     status(`逐步执行 第 ${this.n} 步`)
   },
@@ -664,17 +585,19 @@ const Comp = {
   move(d) { this.i = (this.i + d + this.items.length) % this.items.length; this.show() },
   accept() { const x = this.items[this.i]; src.el.focus(); src.setSel(this.w, this.c); this.hide(); document.execCommand('insertText', false, x) },
 }
-src.el.addEventListener('blur', () => Comp.hide())
+$.ev(src.el, { blur() { Comp.hide() } })
 
 /* ---------- 上下面板拖动调整 ---------- */
 const split = $('#split')
 const setSrcH = px => { src.el.style.height = Math.max(60, Math.min(innerHeight - 160, px)) + 'px'; Sloc.draw() }
 if (+localStorage.getItem('parviz.srcH')) setSrcH(+localStorage.getItem('parviz.srcH'))
-split.addEventListener('pointerdown', e => {
-  e.preventDefault(); split.setPointerCapture(e.pointerId); split.classList.add('drag')
-  const y0 = e.clientY, h0 = src.el.offsetHeight, mv = ev => setSrcH(h0 + ev.clientY - y0)
-  split.addEventListener('pointermove', mv)
-  split.addEventListener('pointerup', () => { split.removeEventListener('pointermove', mv); split.classList.remove('drag'); localStorage.setItem('parviz.srcH', src.el.offsetHeight) }, { once: true })
+$.ev(split, {
+  pointerdown() {
+    $.event.preventDefault(); split.setPointerCapture($.event.pointerId); split.classList.add('drag')
+    const y0 = $.event.clientY, h0 = src.el.offsetHeight
+    const off = $.ev(split, { pointermove() { setSrcH(h0 + $.event.clientY - y0) } })
+    $.ev(split, { pointerup() { off(); split.classList.remove('drag'); localStorage.setItem('parviz.srcH', src.el.offsetHeight) } }, { once: true })
+  },
 })
 
 /* ---------- 键盘（触屏用 #mob 模拟同样的按键） ---------- */
@@ -701,14 +624,14 @@ function onKey(e) {
     else if (e.key == 'ArrowRight' && !e.ctrlKey && !e.altKey && !e.metaKey) { if (Step.start(e.shiftKey)) e.preventDefault() }
   } else if (e.target === rules.el && e.key == 'Enter' && (e.ctrlKey || e.metaKey)) { compile(); e.preventDefault() }
 }
-document.addEventListener('keydown', onKey)
+$.ev(document, { keydown() { onKey($.event) } })
 for (const b of document.querySelectorAll('#mob button')) {
-  b.addEventListener('pointerdown', e => e.preventDefault())   // 不抢输入区焦点
+  $.ev(b, { pointerdown() { $.event.preventDefault() } })   // 不抢输入区焦点
   b.onclick = () => onKey({ key: b.dataset.k, shiftKey: !!b.dataset.shift, ctrlKey: !!b.dataset.ctrl, target: src.el, preventDefault() {} })
 }
-src.el.addEventListener('mousedown', () => { if (Step.on) Step.stop() })
-document.addEventListener('paste', e => { if (performance.now() - S.midAt < 500) e.preventDefault() }, true)   // 中键点树引起的粘贴：别写进输入区
-menu.addEventListener('mouseover', e => { const r = e.target.closest('[data-rule]'); if (r) showRule(r.dataset.rule) })
+$.ev(src.el, { mousedown() { if (Step.on) Step.stop() } })
+$.ev(document, { paste() { if (performance.now() - S.midAt < 500) $.event.preventDefault() } }, true)   // 中键点树引起的粘贴：别写进输入区
+$.ev(menu, { mouseover() { const r = $.event.target.closest('[data-rule]'); if (r) showRule(r.dataset.rule) } })
 
 /* ---------- 作用域：悬停引用连线到定义，点引用翻页跳到定义，点声明用箭头反查引用 ---------- */
 const declAt = (ss, i) => { let d = null; walk(ss.tree, n => { for (const x of n.defs || []) if (x.node && i >= x.node.a && i < x.node.b) d = x }); return d }
@@ -716,38 +639,42 @@ const usesOf = (ss, tok) => { const u = []; walk(ss.tree, n => { if (n.def === t
 function wireScope(ed, ssOf) {
   let refHot = null, saved = ''
   const at = e => { const ss = ssOf(); if (!ss?.tree || ss.src !== ed.value) return null; const i = ed.offsetAt(e.clientX, e.clientY); return i < 0 ? null : { ss, i } }
-  ed.el.addEventListener('mousemove', e => {
-    const a = at(e), u = a && deepest(a.ss.tree, a.i, n => n.def), d = u?.def || null
-    if (d === refHot) return
-    refHot = d; Sloc.ref = d ? { ed, d, u } : null
-    if (d) { if (!saved) saved = $('#status').textContent; status(`定义于 ${a.ss.sloc(d)} · 点击跳到`) }
-    else { status(saved); saved = '' }
-    Sloc.draw()
-  })
-  ed.el.addEventListener('mouseleave', () => { if (!refHot) return; refHot = null; Sloc.ref = null; status(saved); saved = ''; Sloc.draw() })
-  ed.el.addEventListener('click', e => {   // 点引用：翻页跳到定义；点声明：箭头反查全部引用
-    const a = at(e); if (!a) return
-    const { ss, i } = a, u = deepest(ss.tree, i, n => n.def)
-    if (u) { ed.setSel(u.def.a, u.def.b); ed.scrollTo(u.def.a); status(`定义于 ${ss.sloc(u.def)}，共 ${usesOf(ss, u.def).length} 处引用`); Sloc.draw(); return }
-    const d = declAt(ss, i); if (!d) { if (Sloc.rev) { Sloc.rev = null; Sloc.draw() } return }
-    const on = Sloc.rev?.decl === d.node
-    Sloc.rev = on ? null : { ed, decl: d.node, uses: usesOf(ss, d.node) }
-    status(on ? '' : `${d.name}：${Sloc.rev.uses.length} 处引用`)
-    Sloc.draw()
+  $.ev(ed.el, {
+    mousemove() {
+      const a = at($.event), u = a && deepest(a.ss.tree, a.i, n => n.def), d = u?.def || null
+      if (d === refHot) return
+      refHot = d; Sloc.ref = d ? { ed, d, u } : null
+      if (d) { if (!saved) saved = $('#status').textContent; status(`定义于 ${a.ss.sloc(d)} · 点击跳到`) }
+      else { status(saved); saved = '' }
+      Sloc.draw()
+    },
+    mouseleave() { if (!refHot) return; refHot = null; Sloc.ref = null; status(saved); saved = ''; Sloc.draw() },
+    click() {   // 点引用：翻页跳到定义；点声明：箭头反查全部引用
+      const a = at($.event); if (!a) return
+      const { ss, i } = a, u = deepest(ss.tree, i, n => n.def)
+      if (u) { ed.setSel(u.def.a, u.def.b); ed.scrollTo(u.def.a); status(`定义于 ${ss.sloc(u.def)}，共 ${usesOf(ss, u.def).length} 处引用`); Sloc.draw(); return }
+      const d = declAt(ss, i); if (!d) { if (Sloc.rev) { Sloc.rev = null; Sloc.draw() } return }
+      const on = Sloc.rev?.decl === d.node
+      Sloc.rev = on ? null : { ed, decl: d.node, uses: usesOf(ss, d.node) }
+      status(on ? '' : `${d.name}：${Sloc.rev.uses.length} 处引用`)
+      Sloc.draw()
+    },
   })
 }
 let hot = null   // 悬停联动树节点
-src.el.addEventListener('mousemove', e => {
-  if (!S.ss?.tree || S.ss.src !== src.value) return
-  const i = src.offsetAt(e.clientX, e.clientY), n = i < 0 ? null : deepest(S.ss.tree, i, n => S.elOf.has(n)), el = n && S.elOf.get(n)
-  if (el === hot) return
-  hot?.classList.remove('hot'); hot = el; el?.classList.add('hot')
+$.ev(src.el, {
+  mousemove() {
+    if (!S.ss?.tree || S.ss.src !== src.value) return
+    const i = src.offsetAt($.event.clientX, $.event.clientY), n = i < 0 ? null : deepest(S.ss.tree, i, n => S.doc?.idOf.has(n)), el = n && elFor(n)
+    if (el === hot) return
+    hot?.classList.remove('hot'); hot = el; el?.classList.add('hot')
+  },
+  mouseleave() { hot?.classList.remove('hot'); hot = null },
+  scroll() { Sloc.draw() },
 })
-src.el.addEventListener('mouseleave', () => { hot?.classList.remove('hot'); hot = null })
-src.el.addEventListener('scroll', () => Sloc.draw())
-rules.el.addEventListener('scroll', () => Sloc.draw())
+$.ev(rules.el, { scroll() { Sloc.draw() } })
 wireScope(src, () => S.ss); wireScope(rules, () => S.rss)
-addEventListener('resize', () => Sloc.draw())
+$.ev(window, { resize() { Sloc.draw() } })
 hookTree($('#tree'))
 
 /* ---------- 示例 + location.hash ----------
@@ -826,7 +753,7 @@ async function fromHash() {
   } catch (e) { status(`示例加载失败：${e.message}`) }
 }
 sel.onchange = () => load(+sel.value)
-addEventListener('hashchange', fromHash)
+$.ev(window, { hashchange: fromHash })
 if (!window.CSS?.highlights) status('此浏览器不支持 CSS Custom Highlight API，高亮不可用')
 
 /* ---------- 界面文案：原文即键（和 f`` 共用 i18n/<lang>.json）；只扫界面骨架，动态文本不碰 ---------- */

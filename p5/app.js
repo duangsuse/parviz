@@ -1,4 +1,4 @@
-/* p5ui.js — p5.html 的页面逻辑：用 Lisp 写 p5.js 草图（不依赖 ui.js 的调试器视图）。
+/* app.js — p5.html 的页面逻辑：用 Lisp 写 p5.js 草图（不依赖 ui.js 的调试器视图）。
    模型：toplevel 语句 = setup（在 p5 的 setup 里跑一遍，可以 await）；tick / do [=> ...] 注册每帧函数（draw）；
    on "mousePressed" [=> ...] 注册事件；全都可以在任何地方动态注册，返回的句柄交给 off 取消。
    名字回退（宿主）：Lisp 内建 > 作用域 > 本页的 tick/on/off/scope/remap/p > p5 实例 > p5 原型 > window。
@@ -11,6 +11,28 @@ const src = new Editor($('#src'), 'src'), out = $('#out')
 Tweak.init(src, () => cur?.p ? [cur.p.width, cur.p.height] : null)   // 颜色 / 位置小工具（p5tweak.js）
 const status = t => $('#status').textContent = t
 const g = grammar(L.RULES)
+
+/* ---------- 控制台 / sloc：与调试器共用 console.js + sloc.js ---------- */
+const ovg = $('#ov svg g'), mks = $('#mks')
+const OUT = Console.mount(out, {
+  open: s => goto(s.a, s.b),
+  hover: (s, el) => { Sloc.hov = { el, a: s.a, b: s.b }; Sloc.draw() },
+  leave: () => { Sloc.hov = null; Sloc.draw() },
+})
+const Sloc = {
+  hov: null,
+  clear() { mks.textContent = ''; ovg.textContent = '' },
+  draw(srcSs = ss) {
+    this.clear()
+    if (!srcSs || srcSs.src !== src.value) return
+    srcSs.errs.forEach((e, k) => {
+      const r = src.rect(e.a, Math.max(e.b, e.a + 1))
+      if (src.visible(r)) SL.label(mks, `E${k + 1}`, r, 'e', { title: e.msg, onclick: () => goto(e.a, e.b) })
+    })
+    const h = this.hov   // 控制台行 ↔ 源码：悬停时画一条线
+    if (h?.el?.isConnected && h.el.offsetParent) { const r = src.rect(h.a, Math.max(h.b, h.a + 1)); if (src.visible(r)) SL.path(ovg, h.el.getBoundingClientRect(), r) }
+  },
+}
 
 /* ---------- 宿主名字：解析期（高亮/“未定义”判断）与运行期共用同一批名字 ---------- */
 const EVENTS = new Set('mousePressed mouseReleased mouseClicked doubleClicked mouseMoved mouseDragged mouseWheel keyPressed keyReleased keyTyped windowResized touchStarted touchMoved touchEnded'.split(' '))
@@ -56,7 +78,7 @@ function newRun(ss) {
     last: true,   // 函数体取最后一句的值，不要求 OK
     log: { push: item => con(item) },
     alive: () => run.alive,
-    error: (r, tag) => { con({ err: r.err, n: r.x?.node }); if (tag) tag.m.delete(tag.id) },   // 出错的处理器摘掉，免得每帧刷屏
+    error: (r, tag) => { con({ err: r.err, n: r.a != null ? { a: r.a, b: r.b } : null }); if (tag) tag.m.delete(tag.id) },   // 出错的处理器摘掉，免得每帧刷屏
     pause: e => {
       if (e.ph != 'ret' || !bps.size) return
       const hn = headName(e.x?.[1])
@@ -80,16 +102,19 @@ function paintBp() {
   if (ss?.tree && bps.size) walk(ss.tree, n => { if (!n.kids.length && n.k == 'tok' && n.b > n.a) { const t = ss.src.slice(n.a, n.b); if (bps.has(t) && NAME.test(t)) rs.push(src.range(n.a, n.b)) } })
   HL.set('bp', { bp: rs })
 }
-src.el.addEventListener('dblclick', e => {
-  if (ss?.src !== src.value) parse()
-  const i = src.offsetAt(e.clientX, e.clientY), n = i < 0 ? null : nameTokAt(i); if (!n) return
-  const t = ss.src.slice(n.a, n.b), on = !bps.delete(t); if (on) bps.add(t)
-  src.setSel(n.b); paintBp(); status(`断点 ${t} ${on ? '已设置' : '已取消'}（共 ${bps.size} 个）`)
+$.ev(src.el, {
+  dblclick() {
+    const { clientX, clientY } = $.event
+    if (ss?.src !== src.value) parse()
+    const i = src.offsetAt(clientX, clientY), n = i < 0 ? null : nameTokAt(i); if (!n) return
+    const t = ss.src.slice(n.a, n.b), on = !bps.delete(t); if (on) bps.add(t)
+    src.setSel(n.b); paintBp(); status(`断点 ${t} ${on ? '已设置' : '已取消'}（共 ${bps.size} 个）`)
+  },
 })
 function showPause(e, hn) {
-  const n = e.n, sh = L.show, name = e.f?.name || hn || L.fname(e.f)
-  con({ pause: `⏸ [${name}${e.args.map(a => ' ' + sh(a, 1)).join('')}] ⇒ ${sh(e.v, 1)}`, n })
-  if (n) { HL.set('ev', { ev: [src.range(n.a, n.b)] }); src.scrollTo(n.a) }
+  const a = e.a, b = e.b, sh = L.show, name = e.f?.name || hn || L.fname(e.f)
+  con({ pause: `⏸ [${name}${e.args.map(a => ' ' + sh(a, 1)).join('')}] ⇒ ${sh(e.v, 1)}`, n: a != null ? { a, b } : null })
+  if (a != null) { HL.set('ev', { ev: [src.range(a, Math.max(b, a + 1))] }); src.scrollTo(a) }
   $('#resume').hidden = false; status('已暂停（F8 继续）')
 }
 function resume() {
@@ -100,32 +125,32 @@ function resume() {
 $('#resume').onclick = resume
 
 /* ---------- 控制台 #out ---------- */
-const goto = (a, b) => { src.el.focus(); src.setSel(a, b); src.scrollTo(a) }
+const goto = (a, b) => { src.el.focus(); src.setSel(a, b); src.scrollTo(a); requestAnimationFrame(() => Sloc.draw()) }
 function con(it) {
-  const at = it.n, go = el => { if (at) { el.onclick = () => goto(at.a, at.b) } return el }
-  const sl = at && cur?.ss ? '  ' + cur.ss.sloc(at.a) : ''
-  const el = it.err != null ? go(h('span', 'eitem', `✖ ${it.err}${sl}`))
-    : it.warn != null ? go(h('div', 'warn', `⚠ ${it.warn}`))
-    : it.pause != null ? go(h('div', 'pause', it.pause))
-    : it.html != null ? Object.assign(h('div', 'log'), { innerHTML: it.html })
-    : h('div', it.cls || 'log', it.out)
-  out.append(el); while (out.childElementCount > 400) out.firstChild.remove()
-  out.scrollTop = out.scrollHeight
+  const at = it.n, sl = at && cur?.ss ? '  ' + cur.ss.sloc(at.a) : ''
+  OUT.push(
+    it.err != null ? { cls: 'eitem', text: `✖ ${it.err}${sl}`, span: at }
+      : it.warn != null ? { cls: 'warn', text: `⚠ ${it.warn}` }
+      : it.pause != null ? { cls: 'pause', text: it.pause, span: at }
+      : it.html != null ? { cls: 'log', html: it.html }
+      : { cls: it.cls || 'log', text: it.out })
 }
 const fmt = v => v instanceof Error ? v.message : L.show(L.fromJS(v))
 for (const k of ['log', 'info', 'warn', 'error']) {   // console.* 同时进 #out
   const o = console[k].bind(console)
   console[k] = (...a) => { o(...a); con({ out: a.map(fmt).join(' '), cls: k == 'error' ? 'error' : k }) }
 }
-addEventListener('error', e => con({ out: e.message, cls: 'error' }))
-addEventListener('unhandledrejection', e => con({ out: `Promise: ${fmt(e.reason)}`, cls: 'error' }))
-$('#clr').onclick = () => { out.textContent = '' }
+$.ev(window, {
+  error() { con({ out: $.event.message, cls: 'error' }) },
+  unhandledrejection() { con({ out: `Promise: ${fmt($.event.reason)}`, cls: 'error' }) },
+})
+$('#clr').onclick = () => { OUT.clear(); Sloc.clear() }
 
 /* ---------- 解析 / 运行 / 停止 ---------- */
 let ss = null
 function parse() {
   ss = feed(src.value); eat(g, ss)
-  paint(src, ss.tree, g.colors); paintBp(); Tweak.scan(ss)
+  paint(src, ss.tree, g.colors); paintBp(); Tweak.scan(ss); Sloc.draw()
   return ss
 }
 function stop() {
@@ -133,19 +158,19 @@ function stop() {
   cur = null; run.alive = false; L.host = null
   run.paused.splice(0).forEach(r => r()); HL.set('ev', {}); $('#resume').hidden = true
   try { run.p?.remove() } catch { }
-  status('已停止')
+  Sloc.clear(); status('已停止')
 }
 function play() {
-  stop(); parse(); out.textContent = ''
+  stop(); parse(); OUT.clear(); Sloc.clear()
   if (ss.errs.length) {
-    for (const e of ss.errs) { const el = h('span', 'eitem', `✖ ${ss.sloc(e.a)}  ${e.msg}`); el.onclick = () => goto(e.a, Math.max(e.b, e.a + 1)); out.append(el) }
-    status(`${ss.errs.length} 个语法错误，未运行`); return
+    for (const e of ss.errs) OUT.push({ cls: 'eitem', text: `✖ ${ss.sloc(e.a)}  ${e.msg}`, span: e })
+    Sloc.draw(); status(`${ss.errs.length} 个语法错误，未运行`); return
   }
   const run = cur = newRun(ss); L.host = run.host
   new p5(p => {
     run.p = p
     p.setup = () => {
-      const fin = res => { if (res.err) con({ err: res.err, n: res.x?.node }); run.ready = true }
+      const fin = res => { if (res.err) con({ err: res.err, n: res.a != null ? { a: res.a, b: res.b } : null }); run.ready = true }
       const r = L.start(ss.value, run.host.log)
       r instanceof Promise ? r.then(fin) : fin(r)
     }
@@ -158,27 +183,35 @@ $('#stop').onclick = stop
 
 /* ---------- 编辑器 ---------- */
 let pt = 0, ap = 0
-src.el.addEventListener('input', () => {
-  clearTimeout(pt); pt = setTimeout(parse, 150)
-  if ($('#auto').checked) { clearTimeout(ap); ap = setTimeout(play, 700) }
+$.ev(src.el, {
+  input() {
+    clearTimeout(pt); pt = setTimeout(parse, 150)
+    if ($('#auto').checked) { clearTimeout(ap); ap = setTimeout(play, 700) }
+  },
+  keydown() {
+    const { key, ctrlKey, metaKey, shiftKey, altKey } = $.event
+    if (key == 'Enter' && (ctrlKey || metaKey)) { shiftKey ? stop() : play(); $.event.preventDefault(); return }
+    if (key == 'Enter' && !shiftKey && !altKey) {   // 保持缩进
+      const [a] = src.caret(), s = src.value, ind = /^[ \t]*/.exec(s.slice(s.lastIndexOf('\n', a - 1) + 1, a))[0]
+      src.fix(); src.splice('\n' + ind); $.event.preventDefault(); return
+    }
+    if (key == 'Tab') { src.fix(); src.splice('  '); $.event.preventDefault() }
+  },
+  scroll() { Sloc.draw() },
 })
-src.el.addEventListener('keydown', e => {
-  if (e.key == 'Enter' && (e.ctrlKey || e.metaKey)) { e.shiftKey ? stop() : play(); e.preventDefault(); return }
-  if (e.key == 'Enter' && !e.shiftKey && !e.altKey) {   // 保持缩进
-    const [a] = src.caret(), s = src.value, ind = /^[ \t]*/.exec(s.slice(s.lastIndexOf('\n', a - 1) + 1, a))[0]
-    src.fix(); src.splice('\n' + ind); e.preventDefault(); return
-  }
-  if (e.key == 'Tab') { src.fix(); src.splice('  '); e.preventDefault() }
-})
-addEventListener('keydown', e => { if (e.key == 'F8') { resume(); e.preventDefault() } })
+$.ev(window, { keydown() { if ($.event.key == 'F8') { resume(); $.event.preventDefault() } }, resize() { Sloc.draw() } })
+$.ev(out, { scroll() { Sloc.draw() } })
 
 // 编辑器 / 控制台分隔条
 const split = $('#split'), con_ = $('#con')
-split.addEventListener('pointerdown', e => {
-  e.preventDefault(); split.setPointerCapture(e.pointerId); split.classList.add('drag')
-  const bottom = con_.parentElement.getBoundingClientRect().bottom, mv = ev => { con_.style.flex = `0 0 ${Math.max(60, Math.min(bottom - ev.clientY, innerHeight - 200))}px` }
-  split.addEventListener('pointermove', mv)
-  split.addEventListener('pointerup', () => { split.removeEventListener('pointermove', mv); split.classList.remove('drag') }, { once: true })
+$.ev(split, {
+  pointerdown() {
+    const { pointerId } = $.event
+    $.event.preventDefault(); split.setPointerCapture(pointerId); split.classList.add('drag')
+    const bottom = con_.parentElement.getBoundingClientRect().bottom
+    const off = $.ev(split, { pointermove() { con_.style.flex = `0 0 ${Math.max(60, Math.min(bottom - $.event.clientY, innerHeight - 200))}px` } })
+    $.ev(split, { pointerup() { off(); split.classList.remove('drag') } }, { once: true })
+  },
 })
 
 /* ---------- 示例 ---------- */

@@ -3,7 +3,7 @@
 (function (G) {
 'use strict'
 const P = G.P || require('./parse.js')
-const { T, leaf, leaves, isT, parts, viewOf, bind, FAIL } = P, tr = P.f   // tr`…`：报错文本走 parse.js 的国际化（这里 f 常作函数名，故换名）
+const { T, leaf, leaves, isT, parts, bind, FAIL } = P, tr = P.f   // tr`…`：报错文本走 parse.js 的国际化（这里 f 常作函数名，故换名）
 
 /* ======================= ⓪ 四则运算（两种写法） =======================
    CALC：Exp 的 (Atom (- "+" "-"; "*" "/" -)) 是 parse.js 的 TDOP 算符表（; 分级，越往后越紧，左结合）；
@@ -41,7 +41,7 @@ const infix = n => {
   if (n.k != 'bin') return n.v
   const [l, o, r] = n.kids, lv = infix(l), rv = infix(r)
   if (o.text != '-') return T('()', [ref(o.text, o), lv, rv], n, [o, l, r])
-  return T('()', [ref('+', o), lv, T('()', [ref('neg', o), rv], n, [o, r], false)], n, [o, l, r])
+  return T('()', [ref('+', o), lv, T('()', [ref('neg', o), rv], n, [o, r])], n, [o, l, r])
 }
 const ARITH = { '+': (a, b) => a + b, '-': (a, b) => a - b, '*': (a, b) => a * b, '/': (a, b) => a / b }
 
@@ -60,19 +60,19 @@ const tplOf = (v, n) => {
 // cs：结果节点里“基”所在的下标——基是 [..] 时，语句位置的链里它是调用、表达式位置的链里它是数组，求值时把 stmt 往下传到基
 const cs = (x, i) => (x.cs = i, x)
 const dot = (acc, d, at, an, dnk) => {
-  if (isT(d)) return T('.', [acc, d], at, [an, d.node], false)
+  if (isT(d)) return T('.', [acc, d], at, [an, d.node])
   switch (d.k) {
     case 'pipe': {
       const c = d.c
       if (!isT(c) || (c[0] != '()' && c[0] != '[]')) { dnk.err = tr`.. 之后应为调用 (f ..) 或 [f ..]`; return acc }
-      return c.length == 1 ? acc : cs(T('()', [c[1], acc, ...c.slice(2)], at, [c.ns[0], an, ...c.ns.slice(1)], false), 2)
+      return c.length == 1 ? acc : cs(T('()', [c[1], acc, ...c.slice(2)], at, [c.ns[0], an, ...c.ns.slice(1)]), 2)
     }
-    case 'mcall': return cs(T('()', [T('.', [acc, d.key], d.key.node, [an, d.key.node], false), ...d.args], at, [d.key.node, ...d.an], false), 1)
+    case 'mcall': return cs(T('()', [T('.', [acc, d.key], d.key.node, [an, d.key.node]), ...d.args], at, [d.key.node, ...d.an]), 1)
     case 'cb':
-      if (d.opt) return cs(T('()', [ref('As', d.n), acc, d.lam], at, [d.n, an, d.n], false), 2)
-      if (isT(acc) && (acc[0] == '()' || acc[0] == '[]')) return cs(T(acc[0], [...acc.slice(1), d.lam], at, [...acc.ns, d.n], false), acc.cs)
-      return cs(T('()', [acc, d.lam], at, [an, d.n], false), 1)
-    case 'tag': return cs(T('()', [acc, T('[]', d.strs, d.sn[0], d.sn, false), ...d.xs], at, [an, d.sn[0], ...d.xn], false), 1)
+      if (d.opt) return cs(T('()', [ref('As', d.n), acc, d.lam], at, [d.n, an, d.n]), 2)
+      if (isT(acc) && (acc[0] == '()' || acc[0] == '[]')) return cs(T(acc[0], [...acc.slice(1), d.lam], at, [...acc.ns, d.n]), acc.cs)
+      return cs(T('()', [acc, d.lam], at, [an, d.n]), 1)
+    case 'tag': return cs(T('()', [acc, T('[]', d.strs, d.sn[0], d.sn), ...d.xs], at, [an, d.sn[0], ...d.xn]), 1)
   }
 }
 
@@ -84,8 +84,8 @@ const funcs = {
   apply: (v, n) => {
     const [f, xs] = v; if (!xs.length) return f
     const pn = parts(n), an = parts(pn[1]); let acc = f, fn = pn[0]
-    xs.forEach((x, k) => { acc = T('()', [acc, x], n, [fn, an[k]], false); fn = null })   // 中间层也挂 n：viewOf 才会递归展开成 [() [() f a] b]
-    n.view = viewOf(acc); return acc
+    xs.forEach((x, k) => { acc = T('()', [acc, x], n, [fn, an[k]]); fn = null })   // 中间层也挂 n：值视图才展开成 [() [() f a] b]
+    return acc
   },
   // [首项, [[算符, 项]...]] → 左折叠：((首项 o1 项1) o2 项2)…
   chainl: ([x, rest]) => rest.reduce((a, [o, b]) => ARITH[o](a, b), x),
@@ -94,7 +94,7 @@ const funcs = {
     const [b, cs] = v; if (!cs.length) return b
     const pn = parts(n), dn = parts(pn[1]); let acc = b, an = pn[0]
     cs.forEach((d, k) => { acc = dot(acc, d, k == cs.length - 1 ? n : isT(d) ? d.node : dn[k], an, dn[k]); an = null })
-    n.view = viewOf(acc); return acc
+    return acc
   },
   // [条件, [A, B]?] → ["?", 条件, A, B]
   if: (v, n) => { if (v[1] === undefined) return v[0]; const pn = parts(n); return T('?', [v[0], ...v[1]], n, [pn[0], ...parts(pn[1])]) },
@@ -126,7 +126,7 @@ const funcs = {
   cb: (v, n) => {
     const o = n.kids[0]
     n.defs = [...(n.defs || []), { name: 'u', node: o, kind: 'param', nth: 0 }]; bind(n, n.defs); n.defs = null   // 隐式参数 u：在此闭合作用域
-    return { k: 'cb', opt: o.text[0] == '?', lam: T('=>', [T('..', ['u'], o, [o], false), ...v], n, [o, ...parts(n)], false), n }
+    return { k: 'cb', opt: o.text[0] == '?', lam: T('=>', [T('..', ['u'], o, [o]), ...v], n, [o, ...parts(n)]), n }
   },
   ttag: (v, n) => ({ k: 'tag', ...tplOf(v, n) }),
   // `…${x}…` → 无插值是字符串字面量，否则 (str 段 x 段 …)；str 把值转成文本再拼接
@@ -143,7 +143,10 @@ const funcs = {
     v.slice(1).forEach(([k], i) => {
       const tk = leaves(ns[i])[0]
       if (k.at(-1) != '_') tk.err = tr`可选参数名必须以 _ 结尾`
-      else (n.defs ||= []).push({ name: k, node: tk, kind: 'param' })
+      else {   // 定义挂到词条上（颜色 / 增量编辑据此重解析），同时保留在 n.defs 里供 :fn 聚合
+        tk.c = 'P'; tk.defs = [{ name: k, node: tk, kind: 'param' }]
+        ;(n.defs ||= []).push({ name: k, node: tk, kind: 'param' })
+      }
     })
     return T('xargs', [v], n, parts(n))
   },
@@ -161,8 +164,8 @@ function calc(a, n) {
   n.free &&= n.free.filter(r => !ops.has(r.node))                  // 头 > 和运算符是语法，不是名字引用
   const bin = (o, l, r) => {
     const minus = o.t[1] == '-'
-    const rv = minus ? T('()', [ref('neg', o.nd), r.v], n, [o.nd, r.nd], false) : r.v
-    return { v: T('()', [minus ? ref('+', o.nd) : o.t, l.v, rv], n, [o.nd, l.nd, r.nd], false), nd: n }
+    const rv = minus ? T('()', [ref('neg', o.nd), r.v], n, [o.nd, r.nd]) : r.v
+    return { v: T('()', [minus ? ref('+', o.nd) : o.t, l.v, rv], n, [o.nd, l.nd, r.nd]), nd: n }
   }
   const vals = [{ v: a[2], nd: a.ns[1] }], os = []
   const red = () => { const r = vals.pop(), l = vals.pop(); vals.push(bin(os.pop(), l, r)) }
@@ -172,7 +175,7 @@ function calc(a, n) {
     os.push(o); vals.push({ v: a[i + 1], nd: a.ns[i] })
   }
   while (os.length) red()
-  const r = vals[0].v; if (isT(r)) n.view = viewOf(r)
+  const r = vals[0].v
   return r
 }
 const SYM = '[^\\s()\\[\\]{}",;?.\\x60]'
@@ -232,7 +235,9 @@ Name   /(?!Or(?!${SYM}))${SYM}+/ :ref`
 
 /* ======================= ② 求值 walker =======================
    独立于解析：只认标签式 AST。Walk 是 tag → 生成器的表，B 是内建函数表。
-   事件：每个标签节点 in/out；调用返回 ret（带函数、实参、返回值）；判断 if（带条件值）。UI 的 F8 只停在 ret/if/标记处。 */
+   事件：每个标签节点 in/out；调用返回 ret（带函数、实参、返回值）；判断 if（带条件值）。
+   事件只带源码跨度 a/b（值节点自带，见 parse.js 的 T/leaf），不带 CST 节点——显示层换 CST 也不用动这里。
+   UI 的 F8 只停在 ret/if/标记处。 */
 const NO = Object.freeze({ toString: () => 'NO' })
 class Ret { constructor(v) { this.v = v } }          // OK 抛出的流控返回
 class LispErr extends Error { constructor(m, x) { super(m); this.x = x } }
@@ -281,12 +286,12 @@ Object.setPrototypeOf(B, null)   // 名字如 constructor 不会命中 Object �
 function* ev(x, env, stmt = false) {
   if (!isT(x)) return x                      // 数字等裸字面量
   const t = x[0]; let v
-  yield { x, n: x.node, ph: 'in' }
+  yield { x, a: x.a, b: x.b, ph: 'in' }
   if (t === '$') v = lookup(x, env)          // 最常见的三种节点（名字、全局键、字符串字面）不经 Walk 表与生成器委托
   else if (t === '$$') v = glookup(x, env)
   else if (t === '') v = x[1]
   else { const f = Walk[t]; if (!f) throw new LispErr(tr`未知标签 ${t}`, x); v = yield* f(x, env, stmt) }
-  yield { x, n: x.node, ph: 'out', v }
+  yield { x, a: x.a, b: x.b, ph: 'out', v }
   return v
 }
 const lookup = (x, env) => {
@@ -321,10 +326,10 @@ const Walk = {
   },
   *'?'(x, env) {
     const c = yield* ev(x[1], env), t = truthy(c)
-    yield { x, n: x.node, ph: 'if', c, t }
+    yield { x, a: x.a, b: x.b, ph: 'if', c, t }
     return yield* ev(t ? x[2] : x[3], env)
   },
-  *'=>'(x, env) { return { t: 'fn', params: x[1].slice(1), body: x.slice(2), env, node: x.node, name: '' } },
+  *'=>'(x, env) { return { t: 'fn', params: x[1].slice(1), body: x.slice(2), env, a: x.a, b: x.b, name: '' } },
   // ["=", 名字, 值]（源码 [- 名字 值]，不可改变）与 ["->", 名字, 值]（局部赋值，无则初始化）：运行时都是在当前环境里设置，不可变性由 Lexscope 在解析期检查
   *'='(x, env) {
     const v = yield* ev(x[2], env)
@@ -367,7 +372,7 @@ function* call(f, args, x) {
     const e = new Env(f.env), ps = f.params, rest = ps.at(-1) == '..', n = rest ? ps.length - 1 : ps.length
     for (let i = 0; i < n; i++) e.m.set(ps[i], i < args.length ? args[i] : NO)
     if (rest) { const r = args.slice(n); e.m.set('..', r); e.m.set('xargs', Object.assign(() => r, { bname: 'xargs' })) }   // .. 参数收集多出来的实参；(xargs) 返回它们
-    v = yield* body(f.body, e, f.node, L.host?.last)
+    v = yield* body(f.body, e, f, L.host?.last)
   } else if (typeof f == 'function') {
     if (f.lisp) return yield* call(f.lisp, args, x)                      // 交给过 JS 的回调又回到 Lisp：还原
     if (f.gen) v = yield* f(...args)
@@ -377,23 +382,23 @@ function* call(f, args, x) {
       v = fromJS(v)
     }
     if (thenable(v)) {                                                   // 自动 await：驱动器回送 {v} / {err}；同步驱动器不回送，原样返回 Promise
-      const s = yield { x, n: x?.node, ph: 'await', p: v }
+      const s = yield { x, a: x?.a, b: x?.b, ph: 'await', p: v }
       if (s) { if (s.err !== undefined) throw new LispErr(s.err?.message ?? String(s.err), x); v = fromJS(s.v) }
     }
   }
   else throw new LispErr(tr`${show(f, 1)} 不可调用`, x)
-  yield { x, n: x?.node || (f.t == 'fn' ? f.node : null), ph: 'ret', f, args, v }
+  yield { x, a: x ? x.a : (f.t == 'fn' ? f.a : undefined), b: x ? x.b : (f.t == 'fn' ? f.b : undefined), ph: 'ret', f, args, v }
   return v
 }
 // 函数体/程序：单语句直接取值；多语句必须用 OK 返回（last：像 Calc 那样取最后一句的值）
-function* body(items, env, n, last) {
+function* body(items, env, at, last) {
   try {
     if (items.length == 1) return yield* ev(items[0], env, true)
     let v = NO
     for (const y of items) v = yield* ev(y, env, true)
     if (last) return v
   } catch (e) { if (e instanceof Ret) return e.v; throw e }
-  if (items.length) warn(tr`多语句缺少 OK 返回`, n)
+  if (items.length) warn(tr`多语句缺少 OK 返回`, at)
   return NO
 }
 
@@ -402,13 +407,13 @@ let LOG = null
 const warn = (m, n) => (LOG || L.host?.log)?.push({ warn: m, n })
 const globals = log => { const e = new Env(null); e.m.set('w@', Object.assign((...a) => { log.push({ out: a.map(x => show(x)).join(' ') }); return a.at(-1) ?? NO }, { bname: 'w@' })); return e }
 const isDef = s => isT(s) && (s[0] == '=' || s[0] == '->')
-// 逐步执行：迭代器产出上述事件；结束时 done.value = {value} | {err, x}，均带 log。
+// 逐步执行：迭代器产出上述事件；结束时 done.value = {value} | {err, a, b}（a/b 是出错处的源码跨度），均带 log。
 // prog 是根 ["..", 语句...]；ast 不是根时（独立求值）先执行顶层定义再单独求值 ast
 function* steps(ast, prog = ast, last = false, log = []) {
   LOG = log
   try {
     const env = globals(log), stmts = prog.slice(1)
-    if (ast === prog) return { value: yield* body(stmts, env, prog.node, last), log }
+    if (ast === prog) return { value: yield* body(stmts, env, prog, last), log }
     for (const s of stmts) if (isDef(s) && s !== ast) try { yield* ev(s, env, true) } catch (e) { if (!(e instanceof LispErr)) throw e }
     return { value: yield* ev(ast, env, stmts.includes(ast)), log }
   }
@@ -420,7 +425,7 @@ const run = prog => drive(steps(prog))
 const node = (ast, prog) => drive(steps(ast, prog))
 const fail = e => {
   if (e instanceof Ret) return { value: e.v }
-  if (e instanceof LispErr || e instanceof RangeError || e instanceof TypeError) return { err: e.message, x: e.x }
+  if (e instanceof LispErr || e instanceof RangeError || e instanceof TypeError) return { err: e.message, a: e.x?.a, b: e.x?.b }
   throw e
 }
 

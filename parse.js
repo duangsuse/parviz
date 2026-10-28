@@ -9,7 +9,7 @@ const FAIL = Symbol('FAIL'), EOF = Symbol('EOF')
    a,b: 源码区间；v: 后处理后的值；r: 规则名；alt: 规则体有序选择所选分支；c: 颜色 B/Y/G/R/P；err: 报错信息
    作用域接口：free=[{name,node}] 未绑定引用，defs=[{name,node,kind}] 定义，自底向上汇总；
    node.def 指向绑定到的定义节点（悬停连线、点击跳转用）。
-   多态显示：:func 可设 node.view = {tag, kids:[Node|view]}，树视图按它显示为 [tag ..]（如 Lisp 的 [= big [=> ..]]）。 */
+   CST 只描述结构；显示层的脱糖视图由 ui/doc.js 从值 AST 生成，parser 不再认识“显示”。 */
 class Node {
   constructor(k, a, b, kids = []) {
     this.k = k; this.a = a; this.b = b; this.kids = kids
@@ -26,7 +26,7 @@ const walk = (n, f, up = null) => { if (f(n, up) === false) return; for (const c
 const feed = (src, file = 'feed$A', i = 0) => {
   const ss = n => { const q = n < 0, r = ss.src.slice(ss.i, ss.i + (q ? -n : n)); if (q) ss.i -= n; return r }
   Object.assign(ss, {
-    src, file, i, skip: undefined, st: null, far: -1, exp: new Set, stack: [], recur: [], closers: [],
+    src, file, i, skip: undefined, st: null, far: -1, exp: new Set, frames: [], ftop: -1, recur: [], closers: [],
     sync: null, spec: 0, mute: 0, trace: null, vmap: new WeakMap, pairs: [], builtins: new Set, alts: [], lastAlt: -1,
     marks: [],  // 标记：Node | 偏移 | [a,b]；UI 将第 k 个显示为 $(5+k)
     comp: new Map,  // 补齐：位置 → Set(候选词)，由关键字集合登记
@@ -46,9 +46,12 @@ const wpos = ss => { const i = ss.i; ws(ss); const r = ss.i; ss.i = i; return r 
 /* ---------- 跟踪（步进可视化用） ---------- */
 const tr = (ss, t, label, a, b, n, ok) => {
   if (!ss.trace || ss.mute || ss.trace.length > 80000) return
-  ss.trace.push({ t, label, a, b, n, ok, ch: ss.spec > 0, st: ss.stack.slice(), al: ss.alts.at(-1) })
+  ss.trace.push({ t, label, a, b, n, ok, ch: ss.spec > 0, f: ss.ftop, al: ss.alts.at(-1) })   // f：栈帧链表头（不再每步复制栈）
 }
-const ruleTop = ss => { for (let j = ss.stack.length - 1; j >= 0; j--) if (!ss.stack[j].tok) return ss.stack[j].label }
+// 帧池：{label, a, tok, up}，up 指向父帧；进出各一次，事件只存 ftop
+const pushFrame = (ss, label, a, tok) => (ss.ftop = ss.frames.push({ label, a, tok, up: ss.ftop }) - 1)
+const popFrame = ss => { ss.ftop = ss.frames[ss.ftop]?.up ?? -1 }
+const ruleTop = ss => { for (let f = ss.ftop; f >= 0; f = ss.frames[f].up) if (!ss.frames[f].tok) return ss.frames[f].label }
 const fail = (ss, a, label, k) => {
   if (ss.mute) return
   if (a > ss.far) { ss.far = a; ss.exp = new Set }
@@ -77,12 +80,12 @@ const errNode = (ss, a, b, msg) => { const n = new Node('err', a, b); n.err = ms
 const tok = (k, label, rx, match, val) => {
   const p = ss => {
     ws(ss); const a = ss.i
-    if (!ss.mute) { ss.stack.push({ label, a, tok: 1 }); tr(ss, 'in', label, a, a) }
+    if (!ss.mute) { pushFrame(ss, label, a, 1); tr(ss, 'in', label, a, a) }
     const m = match(ss.src, a)
-    if (m == null) { fail(ss, a, label, k); if (!ss.mute) { ss.stack.pop(); tr(ss, 'out', label, a, a, null, false) } return null }
+    if (m == null) { fail(ss, a, label, k); if (!ss.mute) { popFrame(ss); tr(ss, 'out', label, a, a, null, false) } return null }
     ss.i = a + m.length
     const n = new Node(k, a, ss.i); n.text = m; n.v = val(m); n.rx = rx
-    if (!ss.mute) { ss.stack.pop(); tr(ss, 'out', label, a, ss.i, n, true) }
+    if (!ss.mute) { popFrame(ss); tr(ss, 'out', label, a, ss.i, n, true) }
     return n
   }
   p.label = label; p.k = k; p.kind = k; p.src = rx; return p
@@ -274,10 +277,10 @@ const rule = (name, get) => {
   const p = ss => {
     const a0 = ss.i, body = get(), col = ss.some && ss.g.colors[name.split('(')[0]] !== undefined
     if (col) { ws(ss); ss.col++ }   // @skip some：进入有颜色的规则前，在外层（无色）状态里先跳空格，规则内部不再跳
-    if (!ss.mute) { const a = wpos(ss); ss.stack.push({ label: name, a }); tr(ss, 'in', name, a, a) }
+    if (!ss.mute) { const a = wpos(ss); pushFrame(ss, name, a, 0); tr(ss, 'in', name, a, a) }
     const n = body(ss)
     if (col) ss.col--
-    if (!ss.mute) ss.stack.pop()
+    if (!ss.mute) popFrame(ss)
     if (!n) { ss.i = a0; tr(ss, 'out', name, a0, a0, null, false); return null }
     const N = new Node('rule', n.a, n.b, [n]); N.r = name; N.v = n.v
     if (body.alts) N.alt = ss.lastAlt
@@ -302,7 +305,7 @@ const eat = (p, ss) => {
   if (p && p.start) { g = p; p = g.start } else p = to(p)
   if (ss.skip === undefined) ss.skip = g ? g.skip : /\s+/
   ss.skip = sticky(ss.skip); ss.pairs = g ? g.pairs : []; ss.g = g; ss.some = !!g?.some; ss.col = 0; if (g) ss.builtins = g.builtins
-  Object.assign(ss, { far: -1, exp: new Set, stack: [], recur: [], closers: [], sync: EOF, spec: 0, alts: [] })
+  Object.assign(ss, { far: -1, exp: new Set, frames: [], ftop: -1, recur: [], closers: [], sync: EOF, spec: 0, alts: [] })
   let n = null, crash = null
   try { n = p(ss) } catch (e) { if (!(e instanceof RangeError) && !/Recur/.test(e.message)) throw e; crash = e }
   const kids = n ? [n] : [], L = ss.src.length
@@ -320,16 +323,15 @@ const eat = (p, ss) => {
    数组上隐藏 node（CST 节点）与 ns（每个 kid 对应的 CST 节点，原始值 kid 显示用）。 */
 class Tg extends Array { static get [Symbol.species]() { return Array } }   // 标签节点：普通属性 node/ns 比 defineProperty 便宜；slice/map 仍得到普通数组
 const isT = k => Array.isArray(k) && typeof k[0] == 'string' && !!k.node
-const T = (tag, kids, n, ns = [], view = true) => {
+const T = (tag, kids, n, ns = []) => {
   const a = new Tg(kids.length + 1); a[0] = tag
   for (let i = 0; i < kids.length; i++) a[i + 1] = kids[i]
-  a.node = n; a.ns = ns
-  if (view) n.view = viewOf(a)
+  a.node = n; a.ns = ns; a.a = n ? n.a : -1; a.b = n ? n.b : -1   // 值自带源码跨度：walker 事件不再带 CST 节点
   return a
 }
 // 叶子节点（名字 "$" / 全局键 "$$" / 字符串字面 ""）：不分配 kids 临时数组；ns 共用一个空数组（叶子的 kid 就是节点自己，没人按 ns 取）
 const NS0 = Object.freeze([])
-const leaf = (tag, v, n) => { const a = new Tg(2); a[0] = tag; a[1] = v; a.node = n; a.ns = NS0; return a }
+const leaf = (tag, v, n) => { const a = new Tg(2); a[0] = tag; a[1] = v; a.node = n; a.ns = NS0; a.a = n ? n.a : -1; a.b = n ? n.b : -1; return a }
 const isName = t => t === '$' || t === '$$'
 // 产生某节点值的各组成部分对应的 CST 节点（与 vals() 一一对应）
 const parts = n => {
@@ -343,18 +345,6 @@ const parts = n => {
   }
 }
 const leaves = n => { const r = []; if (n) walk(n, x => { if (!x.kids.length && x.k == 'tok') r.push(x) }); return r }
-// 树视图：把标签式 AST 显示成调用 [f a b]；名字调用以名字作 tag，"." 链显示为脱糖后的调用
-// 原始值 kid 的 CST 节点可能套着 Chain/Exp 等规则与空的 (Dot *)：下钻到唯一非空的子节点
-const core = n => { for (;;) { const ks = n.kids.filter(k => k.k != 'lit' && (k.b > k.a || k.err)); if (ks.length != 1 || n.k == 'err') return n; n = ks[0] } }
-const kidOf = (k, nd, a) => isT(k) ? (k.node === a.node || k[0] == '.' ? viewOf(k) : k.node) : nd && core(nd)
-function viewOf(a) {
-  const [tag, ...ks] = a, ns = a.ns, from = (b, i0 = 0) => ks.slice(i0).map((k, i) => kidOf(k, ns[i + i0], b)).filter(Boolean)
-  if (tag == '()' || tag == '[]') {
-    const c = ks[0]
-    return isT(c) && isName(c[0]) ? { tag: c[1], h: c.node, kids: from(a, 1), node: a.node, x: a } : { tag: tag == '[]' ? '..' : '()', kids: from(a), node: a.node, x: a }
-  }
-  return { tag, kids: from(a), node: a.node, x: a }
-}
 
 /* ---------- Lexscope 工具包：词法作用域在组合层完成 ----------
    引用产生 free=[{name,node}]，定义产生 defs=[{name,node,kind}]，二者随 CST 自底向上汇总；
@@ -413,7 +403,7 @@ const lexscope = {
   defn: (v, n) => {
     const [name, ps, body] = v, pn = parts(n), tk = leaves(pn[0])[0], many = Array.isArray(body) && !isT(body)
     bind(n, n.defs); n.defs = null
-    const lam = T('=>', [ps, ...(many ? body : [body])], n, [pn[1], ...(many ? body.ns : [pn[2]])], false)
+    const lam = T('=>', [ps, ...(many ? body : [body])], n, [pn[1], ...(many ? body.ns : [pn[2]])])
     if (tk) { tk.c = 'G'; n.defs = [{ name, node: tk, kind: 'fn' }] }
     return T('=', [name, lam], n, [pn[0]])
   },
@@ -721,7 +711,7 @@ Name    /[A-Z]\\w*/ :ref
 ${META_BODY}`
 examples.push({ name: 'Meta v1（纯结构）', input: META_V1, rules: META_V1 }, { name: 'Meta v2（自描述 + Lexscope）', input: META, rules: META })
 
-const P = { FAIL, EOF, Node, walk, feed, eat, ws, re, lit, kw, seq, alt, opt, many, join, par, fn, rule, mark, recur, prec, to, bind, funcs, lexscope, T, leaf, leaves, isT, isName, parts, viewOf, grammar, mtok, examples, META, META_V1, errsOf, f }
+const P = { FAIL, EOF, Node, walk, feed, eat, ws, re, lit, kw, seq, alt, opt, many, join, par, fn, rule, mark, recur, prec, to, bind, funcs, lexscope, T, leaf, leaves, isT, isName, parts, grammar, mtok, examples, META, META_V1, errsOf, f }
 P.funcs = {}    // 供其他模块（lisp.js）注册额外 :func
 P.walkers = {}  // @walk name：Ctrl+Enter 时对解析结果执行的遍历器 { run(value), steps(value), node(ast, value) }
 if (typeof module != 'undefined') module.exports = P
