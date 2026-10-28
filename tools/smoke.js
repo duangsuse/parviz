@@ -64,6 +64,47 @@ same('def tg(s ..): (OK (list s (xargs))) ...\n(w@ tg`a${1}b${2}c` tg`z`)', ['[[
 same('def f(x ..):\n  [xargs {a_ 1 b_ (+ a_ 10)}]\n  (OK (list x a_ b_ (xargs)))\n...\n(w@ (f 0) (f 0 5) (f 0 NO 7) (f 0 5 6 9))', ['[0 1 11 []] [0 5 15 [5]] [0 1 7 [NO 7]] [0 5 6 [5 6 9]]'])   // 可选参数：按序、NO/缺省取默认值
 assert.deepStrictEqual(lisp('def f(a ..): [xargs {b 1}] a ...').errs, ['可选参数名必须以 _ 结尾'])
 assert.match(lisp('def g(a): [xargs {b_ 1}] (OK b_) ...\n(g 1)').err, /xargs/)                                  // 没有 .. 的参数表不能声明可选参数
+// ---- (tweak …) 声明 / @stmt / Doc.stmts ----
+assert.strictEqual(g.stmt, 'Stmt', '@stmt 指令')
+{
+  const s = P.feed('(tweak list (vec2 0 1) (size 2 3))\n[list 1 2 3 4]\n(w@ 1)'); P.eat(g, s)
+  assert.deepStrictEqual(s.errs.map(e => e.msg), [])
+  assert.strictEqual(s.value[1][0], 'tweak')
+  assert.strictEqual(s.value[1][2][1][1], 'vec2')
+  const r = L.run(s.value); assert.deepStrictEqual(r.log.filter(l => l.out != null).map(l => l.out), ['1'])   // 声明不进运行期求值
+  const d = require('../ui/doc.js').cst(s, g)
+  assert.strictEqual(d.stmts.length, 3)
+  assert.strictEqual(s.src.slice(...d.stmts[1]), '[list 1 2 3 4]')
+  const s2 = P.feed('def f(): (tweak rect (vec2 0 1)) ...\n(w@ 1)'); P.eat(g, s2)
+  assert.deepStrictEqual(s2.errs.map(e => e.msg), ['(tweak …) 只能在顶层'])
+  const gb = P.grammar('@stmt Nope\nStart "x"'); assert.deepStrictEqual(gb.errs.map(e => e.msg), ['@stmt Nope 没有定义'])
+}
+// ---- DBG：语句二分 / F11 边界 / 断点优先级 ----
+{
+  const D = require('../ui/debug.js')
+  D.doc = [[0, 10], [10, 20], [20, 30]]
+  assert.deepStrictEqual([D.stmtOf(5), D.stmtOf(10), D.stmtOf(29), D.stmtOf(30)], [0, 1, 2, -1])
+  D.mode = 'line'; D.lastKey = null
+  assert.strictEqual(D.hit({ a: 5, b: 9, ph: 'in' }), null)                 // 第一步只记下当前语句
+  assert.strictEqual(D.hit({ a: 11, b: 19, ph: 'in' }), 'line')
+  assert.strictEqual(D.hit({ a: 12, b: 19, ph: 'in' }), null)
+  D.mode = 'run'; D.range(11, 19)
+  assert.strictEqual(D.hit({ a: 11, b: 19, ph: 'in' }), 'bp')
+  D.name('f')
+  assert.strictEqual(D.hit({ ph: 'ret', f: { name: 'f' }, a: 99, b: 99 }), 'name')
+  D.mode = 'frame'; D.frameNo = 3; D.target = 4
+  assert.strictEqual(D.hit({ a: 99, b: 99, ph: 'in' }), null); D.frame()
+  assert.strictEqual(D.hit({ a: 99, b: 99, ph: 'in' }), 'frame')
+}
+// ---- Doc.edges：引用 → 定义的 Doc 下标 ----
+{
+  const Doc = require('../ui/doc.js'), s = P.feed('(- a 1)\n(w@ (+ a 2))'); P.eat(g, s)
+  const d = Doc.cst(s, g)
+  assert.strictEqual(d.edges.length, 1)
+  const [a, b] = d.edges[0]
+  assert.strictEqual(s.src.slice(d.a[a], d.b[a]), 'a')
+  assert.strictEqual(s.src.slice(d.a[b], d.b[b]), 'a')
+}
 console.log('smoke ok (;/#)')
 // ---- 脱离调试器独立运行：JS 互操作 / 自动 await / 回调 / 断点暂停 / 取消 ----
 const gh = P.grammar(L.RULES), base = gh.builtins

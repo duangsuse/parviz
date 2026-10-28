@@ -20,7 +20,7 @@
 (function (G) {
 'use strict'
 const P = G.P || require('../parse.js')
-const { isT, isName } = P
+const { isT, isName, walk } = P
 
 const K = { ROOT: 0, BOX: 1, TOK: 2, PAR: 3, ERR: 4, MORE: 5 }
 const F = { ANON: 1, BLK: 2, ERR: 4 }
@@ -35,7 +35,7 @@ class Doc {
     this.kind = []; this.flags = []; this.color = []; this.a = []; this.b = []
     this.key = []; this.text = []; this.sub = []; this.tag = []; this.title = []; this.rule = []; this.len = []
     this.pa = []; this.pb = []; this.first = []; this.next = []; this.parent = []; this.payload = []
-    this.objs = []; this.idOf = new Map; this.edges = []; this.header = null; this.br = false
+    this.objs = []; this.idOf = new Map; this.edges = []; this.header = null; this.br = false; this.stmts = []
   }
   s(v) { let i = this.si.get(v); if (i === undefined) { i = this.str.length; this.str.push(v); this.si.set(v, i) } return i }
   add(o) {
@@ -89,6 +89,7 @@ function lowerCST(ss, g, opt = {}) {
   const node = (n, inh) => {
     if (++count > max) return more()
     const c = col(n) || inh
+    if (n.k == 'rule' && g?.stmt && n.r === g.stmt) d.stmts.push([n.a, n.b])
     if (n.k == 'err') {
       const t = n.b > n.a ? clip(src.slice(n.a, n.b), 40) : '😡😡😡'
       return d.add({ kind: K.ERR, text: t, title: n.err, a: n.a, b: n.b, len: t.length })
@@ -118,7 +119,14 @@ function lowerCST(ss, g, opt = {}) {
       default: return [node(n, c)]
     }
   }
-  return d.finish(flat(ss.tree, ''))
+  d.stmts.sort((x, y) => x[0] - y[0])
+  d.finish(flat(ss.tree, ''))   // 先建节点表（idOf 在 add() 里填），再收集引用→定义的 Doc 下标
+  walk(ss.tree, n => {
+    if (!n.def) return
+    const a = d.idOf.get(n.def), b = d.idOf.get(n)
+    if (a != null && b != null && a !== b) d.edges.push([a, b])
+  })
+  return d
 }
 
 /* ---------- 值 AST → Doc（脱糖视图；与 CST 无关，独立 Tab） ---------- */

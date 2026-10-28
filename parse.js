@@ -574,7 +574,7 @@ function build(m, env, g) {
   }
 }
 function grammar(text, opt = {}) {
-  const g = { text, rules: new Map, insts: new Map, pairs: [], skip: /\s+/, colors: {}, errs: [], builtins: new Set, startName: null, funcs: { ...funcs, ...P.funcs, ...opt.funcs } }
+  const g = { text, rules: new Map, insts: new Map, pairs: [], skip: /\s+/, colors: {}, errs: [], builtins: new Set, startName: null, stmt: null, funcs: { ...funcs, ...P.funcs, ...opt.funcs } }
   const E = (msg, t) => g.errs.push({ a: t ? t.a : 0, b: t ? Math.max(t.b, t.a + 1) : 1, msg })
   const T = mtok(text), stmts = []
   for (const t of T) if (t.bol || !stmts.length) stmts.push([t]); else stmts.at(-1).push(t)
@@ -591,6 +591,10 @@ function grammar(text, opt = {}) {
         else if (h.v == 'start') throw new MErr(f`没有 @start：第一条规则就是起始规则`, h)
         else if (h.v == 'color') for (let j = 0; j < a.length; j += 3) { if (a[j + 1]?.t != '=' || !a[j + 2]) throw new MErr(f`@color Name=B`, a[j]); g.colors[a[j].v] = a[j + 2].v }
         else if (h.v == 'builtin') a.forEach(x => g.builtins.add(x.v))
+        else if (h.v == 'stmt') {   // @stmt Rule：哪条规则算一条“语句”（F11 的边界、Doc.stmts 的来源）
+          const x = a[0]; if (!x || x.t != 'word') throw new MErr(f`@stmt Rule`, x || h)
+          g.stmt = x.v; g.stmtAt = x
+        }
         else if (h.v == 'walk') {
           const w = P.walkers[a[0]?.v]; if (!w) throw new MErr(f`未注册的 walker ${a[0]?.v}`, a[0] || h)
           g.walk = a[0].v; for (const k of w.builtins || []) g.builtins.add(k)
@@ -620,6 +624,7 @@ function grammar(text, opt = {}) {
     return I.p
   }
   for (const [name, R] of g.rules) if (!R.params.length) try { g.inst(name, [], R.h) } catch (e) { if (e instanceof MErr) E(e.message, e.t); else throw e }
+  if (g.stmt && !g.rules.has(g.stmt)) E(f`@stmt ${g.stmt} 没有定义`, g.stmtAt)
   const sr = g.rules.get(g.startName)
   if (sr && !sr.params.length && g.insts.has(g.startName)) g.start = g.insts.get(g.startName).p
   else if (!g.errs.length) E(f`起始规则 ${g.startName || '?'} 不可用`)

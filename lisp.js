@@ -150,6 +150,22 @@ const funcs = {
     })
     return T('xargs', [v], n, parts(n))
   },
+  // (tweak 名字 (vec2 0 1) (size 2)) → ["tweak", 名字, spec…]：只描述实参，不在运行期求值（Walk.tweak 返回 NO）
+  tweak: (v, n) => { const [name, specs] = Array.isArray(v) ? v : []; return T('tweak', [name, ...(Array.isArray(specs) ? specs : [])], n) },
+  // (vec2 0 1) → ["spec", "vec2", 0, 1]；ns 与 kids 对齐：类别词条 + 各数字词条（Tweak 用它定位源码）
+  spec: (v, n) => { const [kind, nums] = Array.isArray(v) ? v : []; return T('spec', [kind, ...(nums || [])], n, leaves(n)) },
+  // :top("tweak")：这类声明只允许出现在顶层；嵌套的标成解析期错误（Tweak.scan 只读顶层）
+  top: tag => (v, n) => {
+    const stmts = Array.isArray(v) ? v : []
+    const chk = (x, root) => {
+      if (Array.isArray(x) && !isT(x)) return x.forEach(y => chk(y, false))
+      if (!isT(x)) return
+      if (x[0] == tag && !root) { if (x.node) x.node.err = tr`(${tag} …) 只能在顶层`; return }
+      for (let i = 1; i < x.length; i++) chk(x[i], false)
+    }
+    for (const s of stmts) chk(s, true)
+    return v
+  },
 }
 Object.assign(P.funcs, funcs)
 
@@ -195,14 +211,15 @@ const RULES = `# Lisp —— 作用域由 Lexscope 工具包组合：:arg2nth �
 @skip /(?:[\\s,;]|#@[\\s\\S]*?@#|#(?!${HEXB})[^\\n]*)+/
 @color Num=B Coef=B Str=Y Qs=Y Lit=Y Tbeg=Y Tbeg1=Y Tend=Y
 @walk lisp
-Lisp   (Stmt *) :global :tag("..")
+@stmt Stmt
+Lisp   (Stmt *) :global :top("tweak") :tag("..")
 Stmt   Exp (Same *) :lstmt
 Same   Exp :lsame
 Exp    ((Chain ("?" Recur "Or" Recur ?) :if) :setRecur)
 Chain  Atom (Dot *) :chain
 Dot    ((".." (List Brk <) :dpipe) (("?.{" ".{" <) (Recur *) "}" :par :cb) ("." (Mcall Str Dkey <)) Ttag <)
 Mcall  (("(" Dkey (Recur *) ")" :par) ("[" Dkey (Recur *) "]" :par) <) :mcall
-Atom   (Mono Num Str Lit Lam Let Set Defn Xargs Tpl List Brk Obj Name <)
+Atom   (Mono Num Str Lit Lam Let Set Defn Xargs Tpl Tweak List Brk Obj Name <)
 Lam    ((/\\((?=\\s*=>)/ "=>" Params (Recur *) ")" :par) (/\\[(?=\\s*=>)/ "=>" Params (Recur *) "]" :par) <) :fn
 Let    ((/\\((?=\\s*-\\s+${SYM}+\\s)/ "-" Var Recur ")" :par) (/\\[(?=\\s*-\\s+${SYM}+\\s)/ "-" Var Recur "]" :par) <) :let
 Set    ((/\\((?=\\s*->\\s+${SYM}+\\s)/ "->" Var Recur ")" :par) (/\\[(?=\\s*->\\s+${SYM}+\\s)/ "->" Var Recur "]" :par) <) :set
@@ -227,6 +244,10 @@ Var    /${SYM}+/
 Pname  /${SYM}+/
 Tpl    (Tbeg (Hole *) "\`") :tpl
 Ttag   (Tbeg1 (Hole *) "\`") :ttag
+Tweak  (/\\((?=\\s*tweak\\b)/ "tweak" Tname (Spec *) ")" :par) :tweak
+Spec   ("(" Tkind (Num *) ")" :par) :spec
+Tname  /${SYM}+/ :lit
+Tkind  /vec2|color|num|size|angle/ :lit
 Hole   "\${" Recur Tend
 Tbeg   /\\x60${TCH}/
 Tbeg1  /(?<=[^\\s,;])\\x60${TCH}/
@@ -256,6 +277,8 @@ class Env {
 
 // 内建：普通函数直接调用；gen 标记的是生成器（会回调 lambda，逐步执行能进到里面）
 const gen = f => (f.gen = 1, f)
+// ctxGen：生成器还要调用点上下文（w@ 打印定位），签名多一个 {cx,a,b,node,args}——只有显式要上下文的内建才改签名
+const ctxGen = f => (f.gen = 1, f.ctx = 1, f)
 const eq = (a, b) => a === b || JSON.stringify(a) === JSON.stringify(b)
 const B = {
   '+': (...a) => a.reduce((x, y) => x + y), neg: a => -a,
@@ -350,6 +373,8 @@ const Walk = {
     for (const [k, d] of x[1].slice(1)) { const g = rest[i++]; env.m.set(k, g !== undefined && g !== NO ? g : yield* ev(d, env)) }
     return NO
   },
+  // (tweak …)：顶层声明，运行期不求值实参（Tweak.scan 从值 AST 读声明）
+  *tweak() { return NO },
   // [".", 基, 键]：o.k / o."k" 取键；JS 对象上的方法取出来时绑定 this（所以 o.[k a] 就是 JS 的 o.k(a)）
   *'.'(x, env, stmt) { return B.get(yield* ev(x[1], env, stmt), x[2][1]) },
 }
@@ -367,28 +392,34 @@ const toJS = v => v === NO ? undefined : v && v.t == 'fn' ? (v.js ||= ((h) => Ob
 const fromJS = v => v === undefined ? NO : v
 const thenable = v => v && typeof v.then == 'function'
 function* call(f, args, x) {
+  const cx = CX || (CX = newCx(L.host, L.host?.log))
+  const fr = { f, x, a: x?.a, b: x?.b }
+  cx.stack.push(fr)
   let v
-  if (f && f.t == 'fn') {
-    const e = new Env(f.env), ps = f.params, rest = ps.at(-1) == '..', n = rest ? ps.length - 1 : ps.length
-    for (let i = 0; i < n; i++) e.m.set(ps[i], i < args.length ? args[i] : NO)
-    if (rest) { const r = args.slice(n); e.m.set('..', r); e.m.set('xargs', Object.assign(() => r, { bname: 'xargs' })) }   // .. 参数收集多出来的实参；(xargs) 返回它们
-    v = yield* body(f.body, e, f, L.host?.last)
-  } else if (typeof f == 'function') {
-    if (f.lisp) return yield* call(f.lisp, args, x)                      // 交给过 JS 的回调又回到 Lisp：还原
-    if (f.gen) v = yield* f(...args)
-    else if (f.bname) { try { v = f(...args) } catch (e) { if ((e instanceof TypeError || e instanceof RangeError) && !e.x) e.x = x; throw e } }   // 内建的参数错误也指到调用处
-    else {                                                               // 外部 JS 函数：参数转 JS、异常归到调用节点
-      try { v = f(...args.map(toJS)) } catch (e) { if (e instanceof Ret || e instanceof LispErr) throw e; throw new LispErr(e?.message ?? String(e), x) }
-      v = fromJS(v)
+  try {
+    if (f && f.t == 'fn') {
+      const e = new Env(f.env), ps = f.params, rest = ps.at(-1) == '..', n = rest ? ps.length - 1 : ps.length
+      for (let i = 0; i < n; i++) e.m.set(ps[i], i < args.length ? args[i] : NO)
+      if (rest) { const r = args.slice(n); e.m.set('..', r); e.m.set('xargs', Object.assign(() => r, { bname: 'xargs' })) }   // .. 参数收集多出来的实参；(xargs) 返回它们
+      v = yield* body(f.body, e, f, L.host?.last)
+    } else if (typeof f == 'function') {
+      if (f.lisp) return yield* call(f.lisp, args, x)                      // 交给过 JS 的回调又回到 Lisp：还原
+      if (f.gen) v = yield* (f.ctx ? f({ cx, a: fr.a, b: fr.b, node: x, args: isT(x) ? x.slice(2) : [] }, ...args) : f(...args))
+      else if (f.bname) { try { v = f(...args) } catch (e) { if ((e instanceof TypeError || e instanceof RangeError) && !e.x) e.x = x; throw e } }   // 内建的参数错误也指到调用处
+      else {                                                               // 外部 JS 函数：参数转 JS、异常归到调用节点
+        try { v = f(...args.map(toJS)) } catch (e) { if (e instanceof Ret || e instanceof LispErr) throw e; throw new LispErr(e?.message ?? String(e), x) }
+        v = fromJS(v)
+      }
+      if (thenable(v)) {                                                   // 自动 await：驱动器回送 {v} / {err}；同步驱动器不回送，原样返回 Promise
+        const s = yield { x, a: x?.a, b: x?.b, ph: 'await', p: v }
+        if (s) { if (s.err !== undefined) throw new LispErr(s.err?.message ?? String(s.err), x); v = fromJS(s.v) }
+      }
     }
-    if (thenable(v)) {                                                   // 自动 await：驱动器回送 {v} / {err}；同步驱动器不回送，原样返回 Promise
-      const s = yield { x, a: x?.a, b: x?.b, ph: 'await', p: v }
-      if (s) { if (s.err !== undefined) throw new LispErr(s.err?.message ?? String(s.err), x); v = fromJS(s.v) }
-    }
-  }
-  else throw new LispErr(tr`${show(f, 1)} 不可调用`, x)
-  yield { x, a: x ? x.a : (f.t == 'fn' ? f.a : undefined), b: x ? x.b : (f.t == 'fn' ? f.b : undefined), ph: 'ret', f, args, v }
-  return v
+    else throw new LispErr(tr`${show(f, 1)} 不可调用`, x)
+    if (cx.hooks && cx.hooks.ext) cx.hooks.ext({ cx, f, x, a: fr.a, b: fr.b, args, v })   // pick 模式：默认 null，运行时只剩一次属性读
+    yield { x, a: x ? x.a : (f.t == 'fn' ? f.a : undefined), b: x ? x.b : (f.t == 'fn' ? f.b : undefined), ph: 'ret', f, args, v }
+    return v
+  } finally { cx.stack.pop() }
 }
 // 函数体/程序：单语句直接取值；多语句必须用 OK 返回（last：像 Calc 那样取最后一句的值）
 function* body(items, env, at, last) {
@@ -402,25 +433,48 @@ function* body(items, env, at, last) {
   return NO
 }
 
-/* ---- 驱动 ---- */
-let LOG = null
-const warn = (m, n) => (LOG || L.host?.log)?.push({ warn: m, n })
-const globals = log => { const e = new Env(null); e.m.set('w@', Object.assign((...a) => { log.push({ out: a.map(x => show(x)).join(' ') }); return a.at(-1) ?? NO }, { bname: 'w@' })); return e }
+/* ---- 驱动 ----
+   一次执行 = 一个 cx：{ run, log, stack, hooks }。CX 是“当前同步段”的 cx，只在 it.next() 周围设置/恢复，
+   所以嵌套入口（JS 回调再进 Lisp）各用各的栈，外层挂起时的栈不受影响；异步挂起后 JS 栈没了，栈还在。 */
+const newCx = (h, log) => ({ run: h?.run ?? null, log: log ?? h?.log ?? [], stack: [], hooks: h?.hooks ?? null })
+let CX = null
+const atOf = () => CX && CX.stack.length ? CX.stack[CX.stack.length - 1] : null
+const sync = (it, f) => { const p = CX; CX = it.cx; try { return f() } finally { CX = p } }
+const step = (it, send) => sync(it, () => it.next(send))
+const warn = (m, n) => (CX?.log || L.host?.log)?.push({ warn: m, n })
+// w@：打印一行并带上调用点；args 是实参的 AST 节点（各带 a/b），spans 供 P2 的逐参部件
+const wAt = ctxGen(function* (c, ...a) {
+  c.cx.log.push({ out: a.map(x => show(x)).join(' '), a: c.a, b: c.b, spans: c.args.map(v => isT(v) && v.a >= 0 ? [v.a, v.b] : null), run: c.cx.run })
+  return a.at(-1) ?? NO
+})
+const globals = cx => { const e = new Env(null); e.cx = cx; e.m.set('w@', Object.assign(wAt, { bname: 'w@' })); return e }
 const isDef = s => isT(s) && (s[0] == '=' || s[0] == '->')
 // 逐步执行：迭代器产出上述事件；结束时 done.value = {value} | {err, a, b}（a/b 是出错处的源码跨度），均带 log。
-// prog 是根 ["..", 语句...]；ast 不是根时（独立求值）先执行顶层定义再单独求值 ast
-function* steps(ast, prog = ast, last = false, log = []) {
-  LOG = log
-  try {
-    const env = globals(log), stmts = prog.slice(1)
-    if (ast === prog) return { value: yield* body(stmts, env, prog, last), log }
-    for (const s of stmts) if (isDef(s) && s !== ast) try { yield* ev(s, env, true) } catch (e) { if (!(e instanceof LispErr)) throw e }
-    return { value: yield* ev(ast, env, stmts.includes(ast)), log }
-  }
-  catch (e) { return { ...fail(e), log } }
-  finally { LOG = null }
+// prog 是根 ["..", 语句...]；ast 不是根时（独立求值）先执行顶层定义再单独求值 ast。cx 挂在迭代器 it.cx 上。
+function steps(ast, prog = ast, last = false, log = [], cx = newCx(L.host, log)) {
+  const it = st(ast, prog, last, cx)
+  it.cx = cx
+  return it
 }
-const drive = (it, max = 300000) => { let r, n = 0; while (!(r = it.next()).done) if (++n > max) return { err: tr`超过 ${max} 步，已中止`, log: [] }; return { ...r.value, steps: n } }
+function* st(ast, prog, last, cx) {
+  try {
+    const env = globals(cx), stmts = prog.slice(1)
+    if (ast === prog) return { value: yield* body(stmts, env, prog, last), log: cx.log }
+    for (const s of stmts) if (isDef(s) && s !== ast) try { yield* ev(s, env, true) } catch (e) { if (!(e instanceof LispErr)) throw e }
+    return { value: yield* ev(ast, env, stmts.includes(ast)), log: cx.log }
+  }
+  catch (e) { return { ...fail(e), log: cx.log } }
+}
+const drive = (it, max = 300000) => {
+  let r, n = 0
+  if (!it.cx) it.cx = newCx(L.host)
+  for (;;) {
+    r = step(it)
+    if (r.done) break
+    if (++n > max) { try { sync(it, () => it.return()) } catch { } return { err: tr`超过 ${max} 步，已中止`, log: it.cx.log } }
+  }
+  return { ...r.value, steps: n }
+}
 const run = prog => drive(steps(prog))
 const node = (ast, prog) => drive(steps(ast, prog))
 const fail = e => {
@@ -435,14 +489,16 @@ const fail = e => {
      pause 在每个事件上被问一次，返回 Promise 就挂起到它兑现（断点）；alive 返回 false 即放弃执行（停止）。 */
 // 驱动生成器：同步一直跑；遇到 await 事件或 pause 返回的 Promise 才转异步。返回结果对象或 Promise<结果对象>
 const exec = (it, h = L.host, max = 3e6) => {
+  if (!it.cx) it.cx = newCx(h, h?.log)                 // callback/runFn 这类入口：新栈，共享 run/log
+  const close = () => { try { sync(it, () => it.return()) } catch { } }
   const go = send => {
     for (let n = 0; ; n++) {
-      if (h?.alive && !h.alive()) { try { it.return() } catch { } return { cancelled: true } }
-      const r = it.next(send); send = undefined
+      if (h?.alive && !h.alive()) { close(); return { cancelled: true } }
+      const r = step(it, send); send = undefined
       if (r.done) return r.value
       const e = r.value, w = e.ph == 'await' ? e.p.then(v => ({ v }), err => ({ err })) : h?.pause?.(e)
       if (w) return w.then(go)
-      if (n > max) { try { it.return() } catch { } return { err: tr`超过 ${max} 步，已中止` } }
+      if (n > max) { close(); return { err: tr`超过 ${max} 步，已中止` } }
     }
   }
   return go()
@@ -450,9 +506,12 @@ const exec = (it, h = L.host, max = 3e6) => {
 function* runFn(f, args) { try { return { value: yield* call(f, args) } } catch (e) { return fail(e) } }
 // 以 Lisp 函数为入口运行：返回值（或 Promise<值>，函数里 await 过时）；出错交给 h.error(res, tag)，值为 undefined。
 // h 默认当前宿主；交给 JS 的回调固定用创建时的宿主（停止/重跑后旧回调随旧宿主作废）
+// 交给 JS 的回调：新栈、沿用函数定义时那次执行的 log（所以异步打印仍落在同一个控制台里）
+const rootLog = f => { for (let e = f?.env; e; e = e.p) if (e.cx) return e.cx.log }
 const callback = (f, args = [], h = L.host, tag) => {
   const fin = r => r.err !== undefined ? (h?.error?.(r, tag), undefined) : r.cancelled ? undefined : toJS(r.value)
-  const r = exec(runFn(f, args), h)
+  const it = runFn(f, args); it.cx = newCx(h, rootLog(f))
+  const r = exec(it, h)
   return r instanceof Promise ? r.then(fin) : fin(r)
 }
 // 以顶层程序为入口运行（语句 = setup）：返回结果对象或 Promise<结果对象>；log 是任何有 push 的接收器（实时输出）
@@ -508,7 +567,9 @@ def opt(a ..): [xargs {b 1}] (OK a) ...   # 可选参数名必须以 _ 结尾
 (OK {sum (add 1 2) xs [1 2 (3 ] ok "fine"})`,
 })
 
-const L = { NO, Ret, LispErr, B, Walk, Env, ev, call, gen, steps, run, node, show, fname, truthy, toJS, fromJS, exec, callback, start, hostOf, host: null, RULES, CALC, CHAIN, funcs }
+const L = { NO, Ret, LispErr, B, Walk, Env, ev, call, gen, ctxGen, steps, step, newCx, atOf, run, node, show, fname, truthy, toJS, fromJS, exec, callback, start, hostOf, host: null, RULES, CALC, CHAIN, funcs,
+  get cx() { return CX },   // 当前同步段（p5 的 console 拦截器用它取调用点）
+}
 if (typeof module != 'undefined') module.exports = L
 G.LISP = L
 })(typeof globalThis != 'undefined' ? globalThis : window)

@@ -5,6 +5,12 @@
 const P5EX = [{
   name: 'Hello：toplevel 即 setup',
   src: `# toplevel 语句就是 setup，只跑一次；JS 函数直接当 Lisp 函数调
+# 格式声明：哪些实参可悬停调、各是什么（vec2 坐标 / size 尺寸 / num 数值 / color 通道）
+(tweak fill (color 0 1 2 3))
+(tweak background (color 0 1 2 3))
+(tweak circle (vec2 0 1) (num 2))
+(tweak rect (vec2 0 1) (size 2 3))
+(tweak text (vec2 1 2))
 [createCanvas 400 300]
 [background 30 30 46]
 [noStroke]
@@ -31,7 +37,10 @@ echo\`Hello \${World}, \${width}×\${height}\`
 `,
 }, {
   name: '跟随鼠标：tick',
-  src: `[createCanvas 400 300]
+  src: `(tweak fill (color 0 1 2 3))
+(tweak background (color 0 1 2 3))
+(tweak circle (vec2 0 1) (num 2))
+[createCanvas 400 300]
 [noStroke]
 
 # tick（等价于 do）注册每帧函数；mouseX / width 这些 p5 变量每次引用都读最新值
@@ -42,7 +51,9 @@ tick [=> ()
 `,
 }, {
   name: '弹球：状态对象 s..[-> {…}]',
-  src: `[createCanvas 400 300]
+  src: `(tweak fill (color 0 1 2 3))
+(tweak background (color 0 1 2 3))
+[createCanvas 400 300]
 [noStroke]
 
 # 名字是不可变绑定，会变的状态放进对象，用 ball..[-> {…}] 原地改
@@ -64,7 +75,8 @@ def if-wall(x r w vx):
 `,
 }, {
   name: '正弦波：each + range',
-  src: `[createCanvas 480 240]
+  src: `(tweak background (color 0 1 2 3))
+[createCanvas 480 240]
 [noStroke]
 
 tick [=> ()
@@ -75,7 +87,9 @@ tick [=> ()
 `,
 }, {
   name: '点击生成粒子：动态注册 tick / on',
-  src: `[createCanvas 480 300]
+  src: `(tweak fill (color 0 1 2 3))
+(tweak background (color 0 1 2 3))
+[createCanvas 480 300]
 [noStroke]
 tick [=> () [background 18 18 28]]               # 最先注册，每帧最先跑：清屏
 
@@ -95,6 +109,7 @@ def spawn(x y):
 }, {
   name: '异步：自动 await Promise',
   src: `# 返回 Promise 的调用自动 await：toplevel / tick 里可以直接顺序等待
+(tweak background (color 0 1 2 3))
 [createCanvas 420 200]
 [background 30 30 46]
 [noStroke]
@@ -120,6 +135,9 @@ tick [=> ()
 }, {
   name: '分形树：def 递归 + 断点',
   src: `# 双击函数名（如 branch / grow）设断点，每次返回都暂停，F8 继续
+(tweak background (color 0 1 2 3))
+(tweak stroke (color 0 1 2 3))
+(tweak line (vec2 0 1) (vec2 2 3))
 [createCanvas 480 360]
 [frameRate 30]
 (- st {a 0.5})

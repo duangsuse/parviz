@@ -13,7 +13,7 @@ header{display:flex;gap:10px;align-items:center;padding:4px 10px;border-bottom:1
 header b{color:var(--fg)}
 button,select{background:#2f3440;color:var(--fg);border:1px solid var(--bd);border-radius:3px;font:inherit;padding:1px 8px;cursor:pointer}
 button:hover,select:hover{border-color:var(--B)}
-#play{color:var(--G)} #stop{color:var(--R)} #resume{color:var(--Y);border-color:var(--Y)}
+#play{color:var(--G)} #stop{color:var(--R)} #resume{color:var(--Y);border-color:var(--Y)} #pick.on{color:var(--Y);border-color:var(--Y)}
 #status{margin-left:auto}
 main{flex:1;display:flex;min-height:0}
 #left{flex:0 0 52%;display:flex;flex-direction:column;min-width:0;border-right:1px solid var(--bd)}
@@ -51,6 +51,16 @@ pre{margin:0}
 ::highlight(tw-pos){background-color:rgba(198,120,221,.16);text-decoration:underline dotted var(--P)}
 #tw{position:fixed;z-index:60;display:none;background:var(--bg2);border:1px solid var(--bd);border-radius:6px;padding:6px;box-shadow:0 6px 24px #000a;font-size:12px;color:var(--mut)}
 #tw canvas{display:block;cursor:crosshair;border-radius:3px}
+/* 目录树（Ctrl+E）：左侧浮层，不挤压画布 */
+#exp{position:fixed;left:0;top:36px;bottom:0;width:260px;z-index:50;background:var(--bg2);border-right:1px solid var(--bd);display:flex;flex-direction:column;box-shadow:6px 0 24px #0006}
+#exp[hidden]{display:none}
+#exp .hd{display:flex;align-items:center;gap:6px;padding:2px 8px;border-bottom:1px solid var(--bd);color:var(--mut);font-size:12px}
+#exp .hd b{color:var(--fg);font-weight:normal;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#exlist{flex:1;overflow:auto;padding:4px 0;font-size:12px}
+#exlist div{padding:1px 8px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#exlist div:hover{background:#2f3440}
+#exlist .dir{color:var(--Y)}
+#exlist .cur{color:var(--B)}
 #tw .row{display:flex;align-items:center;gap:8px;color:var(--fg)}
 #tw input[type=color]{width:64px;height:30px;padding:0;border:1px solid var(--bd);border-radius:3px;background:none;cursor:pointer}
 #tw div:not(.row){margin-top:4px}
@@ -64,7 +74,9 @@ pre{margin:0}
   <b>parviz · p5</b> <a href="./index.html" title="回到递归下降调试器">debugger</a>
   <button id="play" title="运行（Ctrl+Enter）：toplevel 语句 = setup，tick / do 注册每帧函数">▶ 运行</button>
   <button id="stop" title="停止（Ctrl+Shift+Enter）">■ 停止</button>
-  <button id="resume" title="断点处继续（F8）" hidden>⏯ 继续</button>
+  <button id="resume" title="断点处继续（F5 继续 · F8 下一帧 · F11 下一条语句）" hidden>⏯ 继续</button>
+  <button id="pick" title="取源：点画布上的图形，跳到画它的源码">◎ 取源</button>
+  <button id="files" title="打开文件夹（Ctrl+E）· Ctrl+S 保存">🗀 文件夹</button>
   <label title="编辑后自动重新运行"><input type="checkbox" id="auto"> 自动刷新</label>
   <select id="ex" title="内置示例"></select>
   <span title="双击源码里的函数名切换断点；函数每次返回时在这里暂停，F8 继续（含 JS 函数名如 circle / log）">双击函数名：断点 · F8 继续 · Ctrl+Enter 运行</span>
@@ -82,13 +94,21 @@ pre{margin:0}
     <div id="pv"></div>
   </section>
 </main>
+<aside id="exp" hidden>
+  <div class="hd"><b id="expname">目录</b><button id="expclose" title="关闭（Ctrl+E）">×</button></div>
+  <div id="exlist"></div>
+</aside>
 <div id="ov"><svg><g></g></svg><div id="mks"></div></div>
 <script src="https://cdn.jsdelivr.net/npm/p5@1.9.4/lib/p5.min.js"></script>
 <script src="parse.js"></script>
 <script src="lisp.js"></script>
 <script src="ui/editor.js"></script>
 <script src="ui/sloc.js"></script>
+<script src="ui/xref.js"></script>
 <script src="ui/console.js"></script>
+<script src="ui/debug.js"></script>
+<script src="ui/session.js"></script>
+<script src="ui/explorer.js"></script>
 <script src="p5/exec.js"></script>
 <script src="p5/tweak.js"></script>
 <script src="p5/app.js"></script>

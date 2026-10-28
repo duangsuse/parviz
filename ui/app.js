@@ -15,7 +15,7 @@ const S = {
   srcSeen: null, srcSpec: null, zoom: null, midAt: 0,
 }
 const status = t => $('#status').textContent = t
-const deepest = (root, i, ok = () => true) => { let best = null; walk(root, n => { if (n.a <= i && i < Math.max(n.b, n.a + 1)) { if (ok(n)) best = n; return } return false }); return best }
+const { deepest, declAt, usesOf } = Xref   // xref.js：悬停箭头 / 跳定义 / 反查引用
 const exactNode = (a, b) => { let r = null; if (S.ss?.tree) walk(S.ss.tree, n => { if (r) return false; if (n.a == a && n.b == b && n.k != 'top') { r = n; return false } if (n.b < a || n.a > b) return false }); return r }
 Object.assign(window, { ss: null, $1: null, $2: null, $3: null, $4: undefined })   // F12 槽位，见文件头
 const elFor = n => { if (S.view != 'cst') return null; const id = S.doc?.idOf.get(n); return id == null ? null : S.elById.get(id) ?? null }
@@ -268,7 +268,9 @@ function renderOut() {
   ss?.errs.forEach((e, k) => items.push({ cls: 'eitem', text: `E${k + 1} ${ss.sloc(e.a)}  ${e.msg}`, span: e }))
   const r = S.res, oe = S.onedit ? `   // ${S.onedit}` : ''
   if (r?.run) {
-    for (const l of r.run.log) items.push(l.out != null ? { cls: 'log', text: l.out } : { cls: 'warn', text: `⚠ ${l.warn}` })
+    for (const l of r.run.log) items.push(l.out != null
+      ? { cls: 'log', text: l.out, span: l.a != null ? { a: l.a, b: l.b } : null, spans: l.spans }
+      : { cls: 'warn', text: `⚠ ${l.warn}` })
     if (r.run.err) {
       const sp = r.run.a != null ? { a: r.run.a, b: r.run.b } : null
       items.push({ cls: 'eitem', text: `求值错误：${r.run.err}`, span: sp })
@@ -293,7 +295,7 @@ function parse() {
   try { v = eat(S.g, ss) } catch (e) { status('解析异常：' + e.message); console.error(e); S.res = null; renderOut(); return }
   S.ss = ss; S.stale = false; window.ss = window.$1 = ss; window.$3 = S.g; S.zoom = null   // 新树：子树缩放失效
   Sloc.rev = Sloc.ref = null   // 节点换了，反查箭头作废
-  S.doc = Doc.cst(ss, S.g); S.vdoc = Doc.val(ss)
+  S.doc = Doc.cst(ss, S.g); S.vdoc = Doc.val(ss); DBG.setDoc(S.doc)
   paint(src, ss.tree, S.g.colors); renderTree(); Marks.changed(); Edits.sync(ss)
   setResult({ v, label: ` ${(performance.now() - t0).toFixed(1)}ms · ${ss.errs.length} 个错误` }); syncHash()
   if (sel && document.activeElement !== src.el) { src.el.focus(); src.setSel(...sel) }   // 结构性编辑后恢复光标
@@ -337,7 +339,7 @@ function tryShift(old, now) {
   walk(root, n => { const sa = n.a >= b && !inPath.has(n); if (sa) n.a += d; if (n.b > a || inPath.has(n) || sa) n.b += d })
   root.b = now.length; ss.src = now; ss.errs = errsOf(root); S.stale = true
   if (T) { T.text = newT; const r = src.rmap.get(T); if (r) { r.setStart(src.t, T.a); r.setEnd(src.t, T.b) } }   // 先更新词条文本，再重建 Doc
-  S.doc = Doc.cst(ss, S.g); S.vdoc = Doc.val(ss)
+  S.doc = Doc.cst(ss, S.g); S.vdoc = Doc.val(ss); DBG.setDoc(S.doc)
   Edits.sync(ss)
   HL.flush(); renderTree(); Marks.changed(); renderOut(); syncHash()
   status(`顺延 ${d > 0 ? '+' : ''}${d} @${ss.sloc(a)}`)
@@ -501,10 +503,10 @@ const Step = {
 $('#coll').onchange = e => { S.collapse = e.target.checked; if (Step.on) { Step.recalc(); Step.show() } }
 
 /* ---------- 逐步执行（@walk 的生成器 walker） ---------- */
-// [= f (=> ..)]、定义处函数名、引用处函数名上的标记 = 函数断点：像表达式断点的返回一样，在该函数每次返回时一次性显示 [f 实参..] ⇒ 返回值
-// 返回 { bp: lambda 节点→标记序号, moved: 改作函数断点的标记序号 }
+// [= f (=> ..)]、定义处函数名、引用处函数名上的标记 = 函数断点（按名字，ret 时停）；其余标记 = 范围断点。
+// 返回 { names, moved }：moved 是已转成函数断点的标记下标（这些标记不再当作范围断点）。
 function fnBreaks(prog, marks) {
-  const bp = new Map, moved = new Set; if (!marks.length) return { bp, moved }
+  const names = new Set, moved = new Set; if (!marks.length) return { names, moved }
   const at = (n, m) => n && n.a >= 0 && m.a == n.a && m.b == n.b
   const go = x => {
     if (!P.isT(x)) return
@@ -512,33 +514,35 @@ function fnBreaks(prog, marks) {
       // 标记可能落在包着引用词条的外层节点上（同区间的 seq/规则）：在其子树里找同区间且带 .def 的节点
       const nm = x.ns[0], d = m => { let r = null; if (m.n) walk(m.n, y => { if (r || y.b < m.a || y.a > m.b) return false; if (y.def && y.a == m.a && y.b == m.b) r = y.def }); return r }
       const k = marks.findIndex(m => at(x[2], m) || at(x.node, m) || at(nm, m) || (d(m) && nm && nm.a <= d(m).a && d(m).b <= nm.b))
-      if (k >= 0) { moved.add(k); bp.set(x[2].a + ':' + x[2].b, k) }   // 函数断点按源码范围记
+      if (k >= 0) { moved.add(k); names.add(x[1]) }
     }
     for (const y of x.slice(1)) go(y)
   }
-  go(prog); return { bp, moved }
+  go(prog); return { names, moved }
 }
 const EvStep = {
   it: null, n: 0, w: null,
   start() {
     const v = S.ss?.value, w = S.g?.walk && P.walkers[S.g.walk]
     if (!w || !P.isT(v)) { status('当前语法没有 @walk'); return false }
-    Step.stop(); this.w = w; this.it = w.steps(v); this.n = 0; return true
+    Step.stop(); this.w = w; this.it = w.steps(v); this.n = 0
+    DBG.setDoc(S.doc); DBG.mode = 'line'; DBG.lastKey = null
+    return true
   },
-  stop() { if (!this.it) return; this.it = null; HL.set('ev', {}); menu.hidden = caretEl.hidden = true; status('') },
-  // 只在：标记了 $n 的节点、调用返回（连实参带返回值）、判断 处中断；名字解析与函数进入不停
-  next() {
+  stop() { if (!this.it) return; this.it = null; DBG.mode = 'run'; HL.set('ev', {}); menu.hidden = caretEl.hidden = true; status('') },
+  // 停：$n 标记（范围断点）、函数名标记（ret 时停）、#brk 的判断/返回、F11 的语句边界（line=true）
+  next(line) {
     if (!this.it && !this.start()) return
-    const marks = Marks.list(), mk = (a, b) => a == null ? -1 : marks.findIndex(m => m.a == a && m.b == b), B = this.brk()
-    const { bp, moved } = fnBreaks(S.ss.value, marks)
+    const marks = Marks.list(), B = this.brk(), { names, moved } = fnBreaks(S.ss.value, marks)
+    DBG.names = names
+    DBG.bps = new Set(marks.filter((m, i) => !moved.has(i)).map(m => m.a + ':' + m.b))
+    DBG.mode = line ? 'line' : 'run'
     for (let g = 0; g < 1e6; g++) {
-      const r = this.it.next(); this.n++
+      const r = LISP.step(this.it); this.n++
       if (r.done) { const n = this.n; this.stop(); setResult({ run: r.value, show: this.w.show, label: `逐步执行完毕（${n} 步）` }); return }
-      const e = r.value; let k = mk(e.a, e.b)
-      if (moved.has(k)) k = -1                                                            // 定义/函数名本身不停
-      const fk = e.f?.t == 'fn' && e.f.a >= 0 ? e.f.a + ':' + e.f.b : null
-      if (k < 0 && e.ph == 'ret' && fk && bp.has(fk)) k = bp.get(fk)                      // 改停在该函数返回时
-      if (k >= 0 || (e.a != null && ((e.ph == 'if' && B.dec) || (e.ph == 'ret' && B.re?.test(this.w.fname(e.f)))))) return this.show(e, k)
+      const e = r.value
+      const why = DBG.hit(e) || (e.a != null && ((e.ph == 'if' && B.dec) || (e.ph == 'ret' && B.re?.test(this.w.fname(e.f)))) ? 'brk' : null)
+      if (why) return this.show(e, why)
     }
   },
   // #brk：以 | 分隔；单独的 ? 表示判断，其余合成正则整体匹配函数名（默认 ?|.* 即所有判断与所有返回）
@@ -547,8 +551,8 @@ const EvStep = {
     let re = null; if (rest.length) try { re = new RegExp('^(?:' + rest.join('|') + ')$') } catch { status('F8 中断模式不是合法正则') }
     return { dec: alts.includes('?'), re }
   },
-  show(e, k) {
-    const a = e.a, b = e.b, sh = this.w.show, tag = k >= 0 ? `$${5 + k} ` : ''
+  show(e, why) {
+    const a = e.a, b = e.b, sh = this.w.show, tag = why == 'line' ? '语句 ' : why == 'name' ? '函数 ' : why == 'bp' ? '标记 ' : ''
     const txt = e.ph == 'ret' ? `[${this.w.fname(e.f)}${e.args.map(a => ' ' + sh(a, 1)).join('')}] ⇒ ${sh(e.v, 1)}`
       : e.ph == 'if' ? `? ${sh(e.c, 1)} → ${e.t ? '真分支' : '假分支'}`
       : e.ph == 'in' ? `⇢ 进入` : `⇠ ${sh(e.v, 1)}`
@@ -617,7 +621,8 @@ function onKey(e) {
   if (/^[1-6]$/.test(e.key) && !e.ctrlKey && !e.altKey && !e.metaKey && !e.target.isContentEditable && !/^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) {
     toolSel.selectedIndex = +e.key - 1; toolSel.onchange(); e.preventDefault(); return
   }
-  if (e.key == 'F8') { EvStep.next(); e.preventDefault(); return }
+  if (e.key == 'F8') { EvStep.next(false); e.preventDefault(); return }        // 继续到断点/判断
+  if (e.key == 'F11') { EvStep.next(true); e.preventDefault(); return }        // 下一条语句
   if (e.key == 'Escape') { EvStep.stop(); return }
   if (e.target === src.el) {
     if (e.key == 'Enter' && (e.ctrlKey || e.metaKey)) { execute(); e.preventDefault() }
@@ -634,33 +639,6 @@ $.ev(document, { paste() { if (performance.now() - S.midAt < 500) $.event.preven
 $.ev(menu, { mouseover() { const r = $.event.target.closest('[data-rule]'); if (r) showRule(r.dataset.rule) } })
 
 /* ---------- 作用域：悬停引用连线到定义，点引用翻页跳到定义，点声明用箭头反查引用 ---------- */
-const declAt = (ss, i) => { let d = null; walk(ss.tree, n => { for (const x of n.defs || []) if (x.node && i >= x.node.a && i < x.node.b) d = x }); return d }
-const usesOf = (ss, tok) => { const u = []; walk(ss.tree, n => { if (n.def === tok && n !== tok) u.push(n) }); return u }
-function wireScope(ed, ssOf) {
-  let refHot = null, saved = ''
-  const at = e => { const ss = ssOf(); if (!ss?.tree || ss.src !== ed.value) return null; const i = ed.offsetAt(e.clientX, e.clientY); return i < 0 ? null : { ss, i } }
-  $.ev(ed.el, {
-    mousemove() {
-      const a = at($.event), u = a && deepest(a.ss.tree, a.i, n => n.def), d = u?.def || null
-      if (d === refHot) return
-      refHot = d; Sloc.ref = d ? { ed, d, u } : null
-      if (d) { if (!saved) saved = $('#status').textContent; status(`定义于 ${a.ss.sloc(d)} · 点击跳到`) }
-      else { status(saved); saved = '' }
-      Sloc.draw()
-    },
-    mouseleave() { if (!refHot) return; refHot = null; Sloc.ref = null; status(saved); saved = ''; Sloc.draw() },
-    click() {   // 点引用：翻页跳到定义；点声明：箭头反查全部引用
-      const a = at($.event); if (!a) return
-      const { ss, i } = a, u = deepest(ss.tree, i, n => n.def)
-      if (u) { ed.setSel(u.def.a, u.def.b); ed.scrollTo(u.def.a); status(`定义于 ${ss.sloc(u.def)}，共 ${usesOf(ss, u.def).length} 处引用`); Sloc.draw(); return }
-      const d = declAt(ss, i); if (!d) { if (Sloc.rev) { Sloc.rev = null; Sloc.draw() } return }
-      const on = Sloc.rev?.decl === d.node
-      Sloc.rev = on ? null : { ed, decl: d.node, uses: usesOf(ss, d.node) }
-      status(on ? '' : `${d.name}：${Sloc.rev.uses.length} 处引用`)
-      Sloc.draw()
-    },
-  })
-}
 let hot = null   // 悬停联动树节点
 $.ev(src.el, {
   mousemove() {
@@ -673,7 +651,7 @@ $.ev(src.el, {
   scroll() { Sloc.draw() },
 })
 $.ev(rules.el, { scroll() { Sloc.draw() } })
-wireScope(src, () => S.ss); wireScope(rules, () => S.rss)
+Xref.wire({ ed: src, ssOf: () => S.ss, sloc: Sloc, status }); Xref.wire({ ed: rules, ssOf: () => S.rss, sloc: Sloc, status })
 $.ev(window, { resize() { Sloc.draw() } })
 hookTree($('#tree'))
 

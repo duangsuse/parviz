@@ -1,6 +1,6 @@
 # goal-viz.md — 下一版（可视化调试）实施计划
 
-状态：设计定稿，未开始实现。前置条件已满足：上一轮重构把显示层收成了扁平 `Doc`
+状态：P1–P5 已实现并实测；`pick` 用 IDEA.md 的亮点法（另有 bbox 兜底）。已知边界见 §5。前置条件已满足：上一轮重构把显示层收成了扁平 `Doc`
 （`ui/doc.js` 三生产者 + `ui/tree.js` Mithril 同步渲染 + 共享 `ui/console.js` / `ui/sloc.js`），
 并在 headless Chromium 实测过树、步进、F8、xref、控制台跳转、增量顺延。
 
@@ -10,6 +10,29 @@
 2. p5 的示例支持 Ctrl+E 左侧折叠 explorer（Chrome 上接 FSA），未来可扩到多文档。
 3. 调试器打印能被 Tweak 检测（颜色等可视化）、能改返回值；F8 暂停到下一帧入口，F11 逐行；主页也能点函数名打断点。
 4. p5 的 vec2 / color 参数不再硬编码，由 Lisp 自己声明格式（含 W×H 的第二组 vec2）。
+
+---
+
+## 0.1 进度（2026-10-29）
+
+| 阶段 | 状态 |
+| --- | --- |
+| P1 事件/打印通道 | 完成：`cx`、`ctxGen`、`w@` 跨度、两页 Console `span`；用户已在浏览器确认可定位 |
+| P2 声明与语句边界 | 完成：`@stmt`、`(tweak …)` 语法、`Doc.stmts`、`p5/tweak.js` 改读声明（vec2/size/num/angle/color） |
+| P3 控制器 | 完成：`ui/debug.js`（范围/名字断点、F8 帧、F11 语句）；两页接入；p5 的 `DBG.frame()` 在 `p.draw` 最前 |
+| P3 pick | 完成：IDEA.md 的亮点法（帧起点撒点 + 逐 ctx 方法读回 + 栈顶归属），`Tweak.geo` bbox 兜底；`Sloc.pick` 画布→源码 |
+| P3 暂停改值 | 完成：`ret` 暂停行的 JSON 输入框，原地改对象/数组 |
+| P4 xref 共享 | 完成：`ui/xref.js` 两页共用；`Doc.edges` 填好；`Sloc.pick` 与 ref/rev 同层绘制 |
+| P5 会话/explorer | 完成：`ui/session.js`（文本/句柄/脏标记）+ `ui/explorer.js`（Ctrl+E，FSA 逐层目录树，无 FSA 退回文件选择）；页面仍保留自己的 `ss/cur`（单文档） |
+
+实现时定下的细节（与下文草案不同处）：
+
+- `(tweak …)` 的规则要带**前瞻** `/\((?=\s*tweak\b)/`：直接写 `"(" "tweak"` 时，失败会在 `:par` 里吞掉后面的语句。
+- 声明下标从 **0** 起；`size` 与 `vec2` 都吃两个下标，`size` 只影响显示（w/h、按画布）。
+- 颜色按**字面量前缀**匹配：`(color 0 1 2 3)` 对上 `fill 243 139 168 s.a` 仍可调 RGB；灰阶 `fill 255` 不生成部件。
+- `DBG` 的 API：`hit(e)`（index 的循环用）、`at(e)`（p5 的 `host.pause` 用）、`frame()`、`stepLine(e)`、`nextFrame(e)`、`resume()`、`cancel()`。
+- 键位：p5 = `F5` 继续 / `F8` 下一帧 / `F11` 下一条语句；index = `F8` 到断点或判断 / `F11` 逐语句。
+- index 的步进器改用 `LISP.step(it)`（设置当前 `cx`），不再直接 `it.next()`。
 
 ---
 
@@ -304,6 +327,7 @@ Sloc.pick = { from: DOMRect, to: DOMRect, label, cls }
 - `L.cx` 是“当前同步段”指针，p5 内部库自己打的 log 可能带上前一次调用的跨度；
   拦截器必须校验栈顶 `f` 就是被包装的 console 函数，否则不加跨度。
 - `ext` 钩子只在“调用到 JS”后触发；Walk 内部步骤不触发，避免 pick 记录被语法噪音污染。
+- pick 的亮点法在 `p.draw` 里（用户第一笔绘制之前）撒点，逐 ctx 方法读回并重新撒点；只在取源模式读像素。暂停在断点上时 tick 被占用，重画不经过它，取源退回 bbox（需要 `(tweak …)` 声明几何）。
 - F11 依赖 `@stmt`；没有语句规则的语法退化为逐事件（JSON/CSV）。
 - pick 的几何来自 P2 的声明；未声明格式只能报名字。
 - 亮点/标记的撒点时机固定在 `DBG.frame()`；不要改成挂 `clearRect`，否则 `background` 会覆盖它。
