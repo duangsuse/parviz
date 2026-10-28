@@ -16,7 +16,7 @@ const g = grammar(L.RULES)
 const EVENTS = new Set('mousePressed mouseReleased mouseClicked doubleClicked mouseMoved mouseDragged mouseWheel keyPressed keyReleased keyTyped windowResized touchStarted touchMoved touchEnded'.split(' '))
 // p5 的变量不全在原型上（width / mouseX 等在实例上），解析期补一份名单；运行期取值总是查实例（每次引用读到最新值）
 const PVARS = Object.fromEntries('width height mouseX mouseY pmouseX pmouseY winMouseX winMouseY movedX movedY mouseButton mouseIsPressed key keyCode keyIsPressed frameCount deltaTime windowWidth windowHeight displayWidth displayHeight focused pixels touches drawingContext'.split(' ').map(n => [n, 0]))
-const DEFS = ['tick', 'do', 'on', 'off', 'scope', 'remap', 'p']
+const DEFS = ['tick', 'do', 'on', 'off', 'scope', 'remap', 'html', 'p']
 const staticHost = L.hostOf(Object.fromEntries(DEFS.map(n => [n, 0])), p5.prototype, PVARS, globalThis)
 const base = g.builtins; g.builtins = { has: n => base.has(n) || staticHost.has(n) }
 
@@ -49,6 +49,7 @@ function newRun(ss) {
     off: def('off', id => { let hit = run.ticks.delete(id); for (const m of run.evs.values()) hit = m.delete(id) || hit; return hit }),
     scope: Object.assign(L.gen(function* (f) { run.p.push(); try { return yield* L.call(f, []) } finally { try { run.p.pop() } catch { } } }), { bname: 'scope' }),
     remap: def('remap', (...a) => run.p.map(...a)),
+    html: def('html', s => { con({ html: String(s) }); return s }),   // 往 Console 输出一行 HTML（echo`…` 这类 tag 函数用）
     get p() { return run.p },
   }
   run.host = Object.assign(L.hostOf(defs, () => run.p, p5.prototype, PVARS, globalThis), {
@@ -106,6 +107,7 @@ function con(it) {
   const el = it.err != null ? go(h('span', 'eitem', `✖ ${it.err}${sl}`))
     : it.warn != null ? go(h('div', 'warn', `⚠ ${it.warn}`))
     : it.pause != null ? go(h('div', 'pause', it.pause))
+    : it.html != null ? Object.assign(h('div', 'log'), { innerHTML: it.html })
     : h('div', it.cls || 'log', it.out)
   out.append(el); while (out.childElementCount > 400) out.firstChild.remove()
   out.scrollTop = out.scrollHeight

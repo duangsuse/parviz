@@ -1,7 +1,7 @@
 /* p5ex.js — p5.html 的 7 个内置示例（Lisp）。
    约定：toplevel 语句 = setup；tick / do 注册每帧函数（可随时动态注册，返回句柄给 off）；on "事件" 注册事件；
    语句位置 [f a b] 是调用，参数位置要写 (f a b)；中缀只在头是 > 的括号里：(> a + 2b)、比较 [> a <= b]?，减法 (> a - b)，取负 (neg a)；
-   状态放对象里，用 s.[-> {k v}] 原地改；#66ccff 是颜色字面量，悬停整数实参 / 颜色可在编辑器里调。 */
+   状态放对象里，用 s..[-> {k v}] 原地改；#66ccff 是颜色字面量，悬停整数实参 / 颜色可在编辑器里调。 */
 const P5EX = [{
   name: 'Hello：toplevel 即 setup',
   src: `# toplevel 语句就是 setup，只跑一次；JS 函数直接当 Lisp 函数调
@@ -19,7 +19,15 @@ const P5EX = [{
 
 # console.* 也进下面的 Console；Lisp 函数可以当回调参数传给 JS
 [console.log "canvas" width height]
-[console.log "hi" 123 (=>() 456)]
+console.[log "hi" 123 (=>() 456)]    # console.[log …] 就是 [console.log …]：JS 的方法调用，this 是 console
+
+# 模板字符串可多行；echo\`…\` 调 echo(字符串段数组, 值…)，多出来的实参用 (xargs) 取；[html …] 往 Console 输出 HTML
+(- World "p5")
+def echo(strs ..):
+  (- vs (xargs))
+  [html (reduce (range (len vs)) (=> (acc i) \`\${acc}<b style="color:#f38ba8">\${(at vs i)}</b>\${(at strs (+ i 1))}\`) (at strs 0))]
+...
+echo\`Hello \${World}, \${width}×\${height}\`
 `,
 }, {
   name: '跟随鼠标：tick',
@@ -33,19 +41,19 @@ tick [=> ()
   [circle mouseX mouseY 36]]
 `,
 }, {
-  name: '弹球：状态对象 s.[-> {…}]',
+  name: '弹球：状态对象 s..[-> {…}]',
   src: `[createCanvas 400 300]
 [noStroke]
 
-# 名字是不可变绑定，会变的状态放进对象，用 ball.[-> {…}] 原地改
+# 名字是不可变绑定，会变的状态放进对象，用 ball..[-> {…}] 原地改
 (- ball {x 200 y 60 vx 3 vy 0 r 18})
 (- gravity 0.4)
 
 do [=> ()
   [background 17 17 27]
-  ball.[-> {vx (if-wall ball.x ball.r width ball.vx)  vy (> ball.vy + gravity)}]
-  ball.[-> {x (> ball.x + ball.vx)  y (> ball.y + ball.vy)}]
-  (> ball.y + ball.r > height)? ball.[-> {y (> height - ball.r)  vy (> ball.vy * -0.92)}] Or NO
+  ball..[-> {vx (if-wall ball.x ball.r width ball.vx)  vy (> ball.vy + gravity)}]
+  ball..[-> {x (> ball.x + ball.vx)  y (> ball.y + ball.vy)}]
+  (> ball.y + ball.r > height)? ball..[-> {y (> height - ball.r)  vy (> ball.vy * -0.92)}] Or NO
   [fill 249 226 175]
   [circle ball.x ball.y (> ball.r * 2)]]
 
@@ -75,7 +83,7 @@ tick [=> () [background 18 18 28]]               # 最先注册，每帧最先�
 def spawn(x y):
   (- s {x x y y vx (random -2 2) vy (random -4 -1) a 255})
   (- h (tick (=> ()
-    s.[-> {x (> s.x + s.vx)  y (> s.y + s.vy)  vy (> s.vy + 0.08)  a (> s.a - 4)}]
+    s..[-> {x (> s.x + s.vx)  y (> s.y + s.vy)  vy (> s.vy + 0.08)  a (> s.a - 4)}]
     [fill 243 139 168 s.a]
     [circle s.x s.y 12]
     (> s.a < 0)? (off h) Or NO)))
@@ -101,7 +109,7 @@ def spawn(x y):
 # tick 里 await：这个 tick 没跑完时后续帧跳过它 = 协程，一秒一次
 (- st {n 0})
 tick [=> ()
-  st.[-> {n (> st.n + 1)}]
+  st..[-> {n (> st.n + 1)}]
   [fill 255 st.n]
   [textSize 18]
   [text (str "tick " st.n) 20 (> 170 + st.n % 3 * 10)]
@@ -130,7 +138,7 @@ def grow(len depth):
 
 tick [=> ()
   [background 24 24 37]
-  st.[-> {a (remap mouseX 0 width 0.1 1)}]
+  st..[-> {a (remap mouseX 0 width 0.1 1)}]
   [stroke 166 227 161]
   (scope (=> () [translate (> width / 2) height] (branch 80 7)))]
 `,

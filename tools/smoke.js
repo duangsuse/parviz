@@ -17,12 +17,12 @@ const same = (src, out) => { const r = lisp(src); assert.deepStrictEqual([r.errs
 same('(- x 2)\n(- y 1)\n(w@ (> 2x + 3y - 7) (> 2x + 3y > 3) (> 5 - 3 * 2) [> x <= y] (> 1 + 2 < 4 == true) (> x) (reduce [1 2 3] + 0))', ['0 true -1 false true 2 6'])   // (> …) 是唯一的中缀：多项式 / 比较 / 单项；[> …] 同；减法=加负数；优先级 比较 < +- < */%
 for (const bad of ['(> 1 2)', '(> + 1)', '(> 1 +)', '(>)']) assert.deepStrictEqual(lisp(bad).errs, ['(> …) 里应是“项 运算符 项 …”交替，运算符是 + - * / % < <= > >= == !='], bad)   // 项 运算符 项 交替，否则报错
 assert.notStrictEqual(lisp('(w@ (+ 1 + 2))').out[0], '3', '别的头里没有中缀')
-same('(w@ {}.[-> {a 9}] (-> {a 1 b 2} {b 3}))', ['{a 9} {a 1 b 3}'])                                    // any + 对象字面量：合并
-same('(- s {a 1 b 2})\n(- t s.[-> {b 3}])\ns.[-> "c" 4]\n(w@ s (== s t))', ['{a 1 b 3 c 4} true'])           // o.[-> …] 原地合并并返回 o（状态对象）
+same('(w@ {}..[-> {a 9}] (-> {a 1 b 2} {b 3}))', ['{a 9} {a 1 b 3}'])                                   // any + 对象字面量：合并
+same('(- s {a 1 b 2})\n(- t s..[-> {b 3}])\ns..[-> "c" 4]\n(w@ s (== s t))', ['{a 1 b 3 c 4} true'])          // o..[-> …] 原地合并并返回 o（状态对象）
 same('(w@ #66ccff ./a/b.wtf ../x (list #abc #12345678) #bad)\n#xyz 这是注释 (boom\n# #fff 也是注释', ['#66ccff ./a/b.wtf ../x ["#abc" "#12345678"] #bad'])   // 十六进制颜色 / 路径是字面量（#bad 也是）；其余 # 仍是注释
 same('(-> u {a 1})\n(-> u {b 2})\n(w@ u)', ['{a 1 b 2}'])                                                       // 名字 + 对象字面量：部分赋值，无则初始化
 assert.deepStrictEqual(lisp('(- c 1)\n[-> c 2]').errs, ['c 由 - 定义，不能用 -> 改变'])                           // - 定义不可 ->
-same('def d(b x y) (list b x y)\ndef a(c):\n  c.d 5 6\n...\n(w@ (a {k 1}))', ['[{k 1} 5 6]'])                  // c.d e f 即 c.(d e f)
+same('def d(b x y) (list b x y)\ndef a(c):\n  c..(d 5 6)\n...\n(w@ (a {k 1}))', ['[{k 1} 5 6]'])                 // c..(d e f) 即 (d c e f)
 same('def s(p q) (list p q)\ndef t(r):\n  s 1 2\n...\n(w@ (t 0))', ['[1 2]'])                                    // a b 即 (a b)
 // "$"/"$$"：局部绑定是 $，内建 / 运行期全局是 $$
 const tags = new Set; (function f(v) { if (P.isT(v)) { tags.add(v[0]); v.slice(1).forEach(f) } })(lisp('(- f 1)\n(w@ f (+ f 1))').ss.value)
@@ -33,8 +33,17 @@ const s2 = P.feed("  'a'   'x  y'  w1 ", 'f'); P.eat(some, s2); assert.deepStric
 const s3 = P.feed("' a '"); P.eat(some, s3); assert.deepStrictEqual(s3.value, [' a '])
 console.log('smoke ok')
 // ; 分隔语句、# 与 #@ @# 注释
-same('def d(b x y) (list b x y)\ndef a(c): c.d 5 6 ...\ndef s(p q) (list p q)\ndef t(r): s 1 2; (OK (a r)) ...\n(w@ (t {k 1})); (w@ 2) # c\n#@ 多行\n(w@ 99) @#\n(w@ 3)', ['[{k 1} 5 6]', '2', '3'])
-const two = lisp('def s(p) p\n(- c {d s})\ns 1; c.d 2'); assert.deepStrictEqual(two.ss.value.slice(1).map(x => x[0]), ['=', '=', '()', '.'])
+same('def d(b x y) (list b x y)\ndef a(c): c..(d 5 6) ...\ndef s(p q) (list p q)\ndef t(r): s 1 2; (OK (a r)) ...\n(w@ (t {k 1})); (w@ 2) # c\n#@ 多行\n(w@ 99) @#\n(w@ 3)', ['[{k 1} 5 6]', '2', '3'])
+const two = lisp('def s(p) p\n(- c {d s})\ns 1; c.d 2'); assert.deepStrictEqual(two.ss.value.slice(1).map(x => x[0]), ['=', '=', '()', '()'])   // c.d 2 是 (o.d 2)：取键再调用
+// ---- 点号：o.[k a] 方法调用 / x..(f a) 管道 / ?.{ } / .{ } / 模板字符串 / 可选参数 ----
+same('(- inc (=> (a) [len a]..[+ 1]))\n(w@ (inc [1 2 3]) (list 1 2)..(len) 5..(list 6))', ['4 2 [5 6]'])        // 管道；语句位置的基 [len a] 是调用，参数位置的 [..] 是数组
+same('(- o {f len k 7})\n(w@ o.[f [1 2 3]] o.(f "ab") o.k)', ['3 2 7'])                                         // o.[k a] 即 [o.k a]：k 是键，不是名字
+same('(- o {n 4})\n(w@ [1 2 3]?.{ (> u * 2) } o.n?.{ (> u + 1) } o.zz?.{ (> u + 1) } (map [1 2 3]).{ (> u * u) })', ['[2 4 6] 5 NO [1 4 9]'])   // ?.{ } 即 (As 值 (=> (u) …))；.{ } 追加回调
+same('(- w "x")\n(w@ `a ${w} ${w}b${(+ 1 2)}` `l1\nl2` `\\$ \\u0041 e\\n`)', ['a x xb3 l1\nl2 $ A e\n'])      // 模板字符串：插值（段内空白保留）/ 多行 / 转义
+same('def tg(s ..): (OK (list s (xargs))) ...\n(w@ tg`a${1}b${2}c` tg`z`)', ['[["a" "b" "c"] [1 2]] [["z"] []]'])   // tag`…` 即 (tag [段…] 值…)
+same('def f(x ..):\n  [xargs {a_ 1 b_ (+ a_ 10)}]\n  (OK (list x a_ b_ (xargs)))\n...\n(w@ (f 0) (f 0 5) (f 0 NO 7) (f 0 5 6 9))', ['[0 1 11 []] [0 5 15 [5]] [0 1 7 [NO 7]] [0 5 6 [5 6 9]]'])   // 可选参数：按序、NO/缺省取默认值
+assert.deepStrictEqual(lisp('def f(a ..): [xargs {b 1}] a ...').errs, ['可选参数名必须以 _ 结尾'])
+assert.match(lisp('def g(a): [xargs {b_ 1}] (OK b_) ...\n(g 1)').err, /xargs/)                                  // 没有 .. 的参数表不能声明可选参数
 console.log('smoke ok (;/#)')
 // ---- 脱离调试器独立运行：JS 互操作 / 自动 await / 回调 / 断点暂停 / 取消 ----
 const gh = P.grammar(L.RULES), base = gh.builtins
@@ -50,8 +59,11 @@ const exec = async src => { const ss = P.feed(src); P.eat(gh, ss); assert.deepSt
   r = await exec('[setTimeout (=>() [w@ "later"]) 5]\n[wait 30]\n(w@ "end")')
   assert.deepStrictEqual(r.log, ['later', 'end'])                                                  // JS 回调进 Lisp（共用 log）
   r = await exec('(w@ (Promise.reject "boom"))'); assert.strictEqual(r.err, 'boom'); assert(r.x)   // rejected → 报错并指到调用节点
-  r = await exec('(- o {a 1})\n o.[-> {b 2}]\n(w@ o (Math.max 1 5 3) (new Date 0).getTime)')
-  assert.match(r.log[0], /^\{a 1 b 2\} 5 <builtin/)                                                // o.[-> …] 原地合并；Math.max；key 取出的方法绑定 this
+  r = await exec('(- o {a 1})\n o..[-> {b 2}]\n(w@ o (Math.max 1 5 3) (new Date 0).getTime)')
+  assert.match(r.log[0], /^\{a 1 b 2\} 5 <builtin/)                                                // o..[-> …] 原地合并；Math.max；key 取出的方法绑定 this
+  seen.length = 0; console.log = (...a) => seen.push(a)
+  r = await exec('console.[log "m" 1]\n[console.log "n" 2]\nconsole.log "o" 3\n(w@ Math.[max 1 5 3] (new Date 0).[getTime])'); console.log = saved
+  assert.deepStrictEqual([seen.map(a => a.join(' ')), r.log], [['m 1', 'n 2', 'o 3'], ['5 0']])        // console.[log …] ≡ [console.log …] ≡ console.log …：JS 的 OOP，this 是 console
   r = await exec('def f(a):\n  (- b 1)\n  (+ a b)\n...\n(w@ (f 3))'); assert.deepStrictEqual(r.log, ['4'])   // host.last：多语句函数取最后一句，不要求 OK
   // 断点：pause 返回 Promise 就挂起到它兑现；alive 为 false 即放弃
   let hits = 0

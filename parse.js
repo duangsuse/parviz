@@ -353,12 +353,6 @@ function viewOf(a) {
     const c = ks[0]
     return isT(c) && isName(c[0]) ? { tag: c[1], h: c.node, kids: from(a, 1), node: a.node, x: a } : { tag: tag == '[]' ? '..' : '()', kids: from(a), node: a.node, x: a }
   }
-  if (tag == '.') {
-    const [b, c] = ks, bk = kidOf(b, ns[0], a)
-    if (isT(c) && (c[0] == '()' || c[0] == '[]') && isT(c[1]) && isName(c[1][0]))
-      return { tag: c[1][1], h: c[1].node, kids: [bk, ...c.slice(2).map((k, i) => kidOf(k, c.ns[i + 1], c)).filter(Boolean)], node: c.node, x: a }
-    return { tag: '.', kids: [bk, kidOf(c, ns[1], a)].filter(Boolean), node: a.node, x: a }
-  }
   return { tag, kids: from(a), node: a.node, x: a }
 }
 
@@ -727,7 +721,7 @@ Name    /[A-Z]\\w*/ :ref
 ${META_BODY}`
 examples.push({ name: 'Meta v1（纯结构）', input: META_V1, rules: META_V1 }, { name: 'Meta v2（自描述 + Lexscope）', input: META, rules: META })
 
-const P = { FAIL, EOF, Node, walk, feed, eat, ws, re, lit, kw, seq, alt, opt, many, join, par, fn, rule, mark, recur, prec, to, bind, funcs, lexscope, T, leaf, isT, isName, parts, viewOf, grammar, mtok, examples, META, META_V1, errsOf, f }
+const P = { FAIL, EOF, Node, walk, feed, eat, ws, re, lit, kw, seq, alt, opt, many, join, par, fn, rule, mark, recur, prec, to, bind, funcs, lexscope, T, leaf, leaves, isT, isName, parts, viewOf, grammar, mtok, examples, META, META_V1, errsOf, f }
 P.funcs = {}    // 供其他模块（lisp.js）注册额外 :func
 P.walkers = {}  // @walk name：Ctrl+Enter 时对解析结果执行的遍历器 { run(value), steps(value), node(ast, value) }
 if (typeof module != 'undefined') module.exports = P

@@ -159,3 +159,37 @@ lisp.js 的头部预先写一个+-*/和括号的文法， 支持单参lexscope�
 
 "吃下" text 改成top1规则名（绿色）。 当结构性编辑时，注意恢复光标位置和避免高亮闪烁。 TDOP 要有办法触发Lam，比如 (-> x (-> n x*n+1)) 10 2 
  
+> 6
+
+
+项目目前的经验在 README ，git staging里的修改要求还没应用，另外有这些要求：
+
+把Lisp里所有 [=] 赋值改为 [-]，比如 [- f (=>(x) ..)]
+
+Walk 里， '': 名字解析 改成 '': 字符串字面。 AST要为节点常见度优化
+
+句级有 (a) b 其实相当于 ((a) b) ，auto-semi-insert 规则类似JS
+
+{}.[get "k"] 应该写为 {}.k ，set 写为 {}.[-> {"k" "new"}]
+
+Lisp 应该可以脱离debugger视图，在单独 p5.html 里导入和独立运行，以调用js函数，比如 [console.log "hi" 123 (=>() 456)] ，它自动await Promise， #out 还是可以用，断点(n标记)改成双击函数名切换。 
+
+先按照P5.js的面板UI，内置7个示例。 API 风格要调。 setup 语句直接写toplevel，draw写成 do [-> ...] / tick [-> ] 可动态注册的模式
+
+和[]一样，在点号上?.{}也有特殊转义。新增 (f x)?.{ (+ 1 u) } 也就是 (As (f x) [=>(u) (+ 1 u)]) ，默认在x是数组时mapNotNO，x falsey时得x，否则(f x)。 普通的 (f).{} 则和 x.(f) 很像，转换为 (f .. [=>(u) ..])
+
+`` backtick和ES6一样，支持字符串内插和多行。它也有类似的template语法，比如p5里的用例： def echo; 让 echo.`Hello ${`World`}` 将World显示为红色html log                                                                            
+                                                                                                                                                                                                                                
+函数要支持可选参数，表现为 [=> (x ..) [xargs {a_ 1 b_ 2}] (OK (+ a_ b_))] ，可选参数只允许以 _ 结尾。 (xargs) 本身返回vararg的实际值                                                                                             
+
+not改成isnt，加个 (both A B)= A and B。要支持内联infix: (> 2x + 3y) 。 现在的逻辑类型是用nullish取代false，做的很对。
+
+'=' 定义改为区分定义和赋值（可能涉及Lexscope接口）， '->' 是（若无则初始化）局部赋值， [- A B] 后则由lexscope检查不能改变（AST显示为'='） 。 
+
+这个编辑器要对整数2arg/3arg硬编码判定是颜色还是位置。颜色用预览和picker（就像Monaco），位置也可悬停预览和点击调整，效仿Tweakpane。                                                                                                
+                                                                                                                                                                                                                                
+Lisp的'#'注释也要放宽，支持 ■ #66ccff 和 ./path.wtf 这两种字面量                                                                                                                                                                  
+                                                                                                                                                                                                                                
+例子5. 的assign很奇怪，为什么不是 s.[-> {..}]                                                                                                                                                                                     
+                                                                                                                                                                                                                                
+例子4. 有许多可以变多项式的。 我对Lisp里 (> ) 语法的定义，是【里边有infix】，其他地方不能有。 现在可能写错了，一般加法都要用 (> A + B) 来写的                                                                                     

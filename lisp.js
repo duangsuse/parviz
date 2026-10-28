@@ -3,7 +3,7 @@
 (function (G) {
 'use strict'
 const P = G.P || require('./parse.js')
-const { T, leaf, isT, parts, viewOf, FAIL } = P, tr = P.f   // tr`…`：报错文本走 parse.js 的国际化（这里 f 常作函数名，故换名）
+const { T, leaf, leaves, isT, parts, viewOf, bind, FAIL } = P, tr = P.f   // tr`…`：报错文本走 parse.js 的国际化（这里 f 常作函数名，故换名）
 
 /* ======================= ⓪ 四则运算（两种写法） =======================
    CALC：Exp 的 (Atom (- "+" "-"; "*" "/" -)) 是 parse.js 的 TDOP 算符表（; 分级，越往后越紧，左结合）；
@@ -45,8 +45,39 @@ const infix = n => {
 }
 const ARITH = { '+': (a, b) => a + b, '-': (a, b) => a - b, '*': (a, b) => a * b, '/': (a, b) => a / b }
 
+// ---- 点号链 / 模板字符串的脱糖助手 ----
+const ESC = { n: '\n', t: '\t', r: '\r', b: '\b', f: '\f', v: '\v', 0: '\0' }
+const unesc = s => s.replace(/\\(?:u\{([0-9a-fA-F]+)\}|u([0-9a-fA-F]{4})|x([0-9a-fA-F]{2})|(\r?\n)|([\s\S]))/g, (_, a, b, c, nl, ch) => a || b || c ? String.fromCodePoint(parseInt(a || b || c, 16)) : nl ? '' : ESC[ch] ?? ch)
+// 模板字符串值 [首段文本, [[表达式, 后续段文本]…]] → 各段字符串字面量（各带自己的 token 节点）+ 表达式
+const tplOf = (v, n) => {
+  const [b, hs] = v, pn = parts(n), hn = parts(pn[1])
+  const strs = [leaf('', unesc(b.slice(1)), pn[0])], sn = [pn[0]], xs = [], xn = []
+  hs.forEach(([e, t], i) => { const [en, tn] = parts(hn[i]); xs.push(e); xn.push(en); strs.push(leaf('', unesc(t.slice(1)), tn)); sn.push(tn) })
+  return { strs, sn, xs, xn }
+}
+// 基 acc 接一个点项 d：键 → ["." 基 键]；mcall → [(. 基 键) 实参…]；pipe → (f 基 实参…)；cb → As / 追加回调；tag → (tag [段…] 值…)
+// at：挂在结果上的 CST 节点；an：基的 CST 节点；dnk：这一项的 CST 节点
+// cs：结果节点里“基”所在的下标——基是 [..] 时，语句位置的链里它是调用、表达式位置的链里它是数组，求值时把 stmt 往下传到基
+const cs = (x, i) => (x.cs = i, x)
+const dot = (acc, d, at, an, dnk) => {
+  if (isT(d)) return T('.', [acc, d], at, [an, d.node], false)
+  switch (d.k) {
+    case 'pipe': {
+      const c = d.c
+      if (!isT(c) || (c[0] != '()' && c[0] != '[]')) { dnk.err = tr`.. 之后应为调用 (f ..) 或 [f ..]`; return acc }
+      return c.length == 1 ? acc : cs(T('()', [c[1], acc, ...c.slice(2)], at, [c.ns[0], an, ...c.ns.slice(1)], false), 2)
+    }
+    case 'mcall': return cs(T('()', [T('.', [acc, d.key], d.key.node, [an, d.key.node], false), ...d.args], at, [d.key.node, ...d.an], false), 1)
+    case 'cb':
+      if (d.opt) return cs(T('()', [ref('As', d.n), acc, d.lam], at, [d.n, an, d.n], false), 2)
+      if (isT(acc) && (acc[0] == '()' || acc[0] == '[]')) return cs(T(acc[0], [...acc.slice(1), d.lam], at, [...acc.ns, d.n], false), acc.cs)
+      return cs(T('()', [acc, d.lam], at, [an, d.n], false), 1)
+    case 'tag': return cs(T('()', [acc, T('[]', d.strs, d.sn[0], d.sn, false), ...d.xs], at, [an, d.sn[0], ...d.xn], false), 1)
+  }
+}
+
 /* ======================= ① 语法 =======================
-   Lisp 特有的语法糖：a.(f b) / a.k 链、(c)? A Or B、语句级 (a) b 即 ((a) b)、(> 2x + 3y) / [> a <= b] 内联中缀（只有头是 > 的括号里才有中缀）。其余（lambda、定义、def 写法）都在规则里用工具包组合。 */
+   Lisp 特有的语法糖：o.k 取键、o.[k a] 方法调用（等价于 [o.k a]，JS 的 OOP）、x..(f a) 管道（x 插为第一个实参）、(f)?.{ … } / (f).{ … } 回调块、`…${x}…` 模板字符串与 tag`…`、(x ..) [xargs {a_ 1}] 可选参数、(c)? A Or B、语句级 (a) b 即 ((a) b)、(> 2x + 3y) / [> a <= b] 内联中缀（只有头是 > 的括号里才有中缀）。其余（lambda、定义、def 写法）都在规则里用工具包组合。 */
 const funcs = {
   infix: (v, n) => infix(n),
   // [函数, [实参...]] → ["()", ["()", 函数, 实参1], 实参2]…（单参 lambda 的柯里化调用）；树里显示为 [() [() f a] b]
@@ -58,11 +89,11 @@ const funcs = {
   },
   // [首项, [[算符, 项]...]] → 左折叠：((首项 o1 项1) o2 项2)…
   chainl: ([x, rest]) => rest.reduce((a, [o, b]) => ARITH[o](a, b), x),
-  // [基, [调用...]] → [".", [".", 基, 调用1], 调用2]…；树里显示为脱糖后的 [f 基 ..]
+  // [基, [点项...]] → 逐项脱糖（见 dot）；树里显示为脱糖后的调用
   chain: (v, n) => {
     const [b, cs] = v; if (!cs.length) return b
-    const pn = parts(n); let acc = b, an = pn[0]
-    cs.forEach((c, k) => { acc = T('.', [acc, c], k == cs.length - 1 ? n : c.node, [an, c.node], false); an = null })
+    const pn = parts(n), dn = parts(pn[1]); let acc = b, an = pn[0]
+    cs.forEach((d, k) => { acc = dot(acc, d, k == cs.length - 1 ? n : isT(d) ? d.node : dn[k], an, dn[k]); an = null })
     n.view = viewOf(acc); return acc
   },
   // [条件, [A, B]?] → ["?", 条件, A, B]
@@ -70,19 +101,12 @@ const funcs = {
   // 字符串字面量 → ["", 文本]；Dkey 是 o.k 的裸键（bare），语句级 o.k args 时改成名字
   strlit: (v, n) => leaf('', v, n),
   lit: (v, n) => leaf('', v, n),   // #66ccff / ./a.wtf：字符串字面量（原样文本）
-  dkey: (v, n) => Object.assign(leaf('', v, n), { bare: true }),
   // 2x → (* 2 x)
   lmono: ([k, name], n) => { const pn = parts(n); return T('()', [ref('*', pn[0]), k, name], n, [pn[0], pn[0], pn[1]]) },
-  // 语句级“自动插括号”：同一行里 Exp 之后并列的 Exp 是实参。a b → (a b)；(a) b → ((a) b)；c.d e f → c.(d e f)（头是 o.k 取键时，k 当作被调用的名字）；换行结束语句（类似 JS 的自动分号）
+  // 语句级“自动插括号”：同一行里 Exp 之后并列的 Exp 是实参。a b → (a b)；(a) b → ((a) b)；o.k e f → (o.k e f)（方法调用）；换行结束语句（类似 JS 的自动分号）
   lstmt: ([a, rest], n) => {
     if (!rest.length) return a
-    const pn = parts(n), rn = parts(pn[1]), c = isT(a) && a[0] == '.' && a[2]
-    if (isT(c) && c.bare) {
-      const nm = leaf('$', c[1], c.node)
-      n.free = [...(n.free || []), { name: c[1], node: c.node, x: nm }]
-      const dot = T('.', [a[1], T('()', [nm, ...rest], n, [c.node, ...rn], false)], n, [a.ns[0], n], false)
-      n.view = viewOf(dot); return dot
-    }
+    const pn = parts(n), rn = parts(pn[1])
     return T('()', [a, ...rest], n, [pn[0], ...rn])
   },
   // 同一行并列才算实参：换行、或之间隔着 ; 都结束语句
@@ -96,6 +120,33 @@ const funcs = {
   },
   // [> a <= b] 同样是内联中缀（表达式位置也不会被当成数组）；其余 [..] 原样
   lbrk: (v, n) => v[1]?.[0] == '$' && v[1][1] == '>' ? calc(v, n) : v,
+  // 点项：..(f a) 管道；.[k a] / .(k a) 方法调用（k 是键，不是名字）；?.{ … } / .{ … } 回调块（参数名固定为 u）；tag`…` 带标签的模板字符串
+  dpipe: v => ({ k: 'pipe', c: v }),
+  mcall: ([key, args], n) => ({ k: 'mcall', key, args, an: parts(parts(n)[1]) }),
+  cb: (v, n) => {
+    const o = n.kids[0]
+    n.defs = [...(n.defs || []), { name: 'u', node: o, kind: 'param', nth: 0 }]; bind(n, n.defs); n.defs = null   // 隐式参数 u：在此闭合作用域
+    return { k: 'cb', opt: o.text[0] == '?', lam: T('=>', [T('..', ['u'], o, [o], false), ...v], n, [o, ...parts(n)], false), n }
+  },
+  ttag: (v, n) => ({ k: 'tag', ...tplOf(v, n) }),
+  // `…${x}…` → 无插值是字符串字面量，否则 (str 段 x 段 …)；str 把值转成文本再拼接
+  tpl: (v, n) => {
+    const { strs, sn, xs, xn } = tplOf(v, n)
+    if (!xs.length) return leaf('', strs[0][1], n)
+    const items = [ref('str', n)], ns = [n]
+    strs.forEach((s, i) => { if (s[1] !== '') { items.push(s); ns.push(sn[i]) } if (i < xs.length) { items.push(xs[i]); ns.push(xn[i]) } })
+    return T('()', items, n, ns)
+  },
+  // [xargs {a_ 1 b_ 2}] → ["xargs", {…}]：声明以 _ 结尾的可选参数（定义到外层 lambda 的作用域）；(xargs) 是普通调用，返回 .. 收到的实参
+  xargs: (v, n) => {
+    const ns = parts(parts(n)[0])
+    v.slice(1).forEach(([k], i) => {
+      const tk = leaves(ns[i])[0]
+      if (k.at(-1) != '_') tk.err = tr`可选参数名必须以 _ 结尾`
+      else (n.defs ||= []).push({ name: k, node: tk, kind: 'param' })
+    })
+    return T('xargs', [v], n, parts(n))
+  },
 }
 Object.assign(P.funcs, funcs)
 
@@ -124,46 +175,59 @@ function calc(a, n) {
   const r = vals[0].v; if (isT(r)) n.view = viewOf(r)
   return r
 }
-const SYM = '[^\\s()\\[\\]{}",;?.]'
+const SYM = '[^\\s()\\[\\]{}",;?.\\x60]'
 const STR = '"(\\\\.|[^"\\\\])*"'
-const END = '(?![^\\s()\\[\\]{}",;?])'                                   // 字面量必须在分隔符处结束
+const END = '(?![^\\s()\\[\\]{}",;?\\x60])'                              // 字面量必须在分隔符处结束
 const HEXB = `(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})${END}`, HEX = '#' + HEXB   // #rgb #rgba #rrggbb #rrggbbaa：不再当注释
+const TCH = '(?:[^\\x60$\\\\]|\\\\[\\s\\S]|\\$(?!\\{))*'                 // 模板字符串的一段文本：到 ` 或 ${ 为止，\ 转义任意字符（含换行）
 const RULES = `# Lisp —— 作用域由 Lexscope 工具包组合：:arg2nth 参数表、:fn 闭合 lambda、:let 定义、:set 赋值、:defn 两者合一、:ref 引用、:global 顶层
 # (=> (a b) e)、[- f (=> (a b) e)]、def f(a b) e 产生完全相同的 AST（"=" 定义，不可被 -> 改变）；[-> x e] 是局部赋值（无则初始化）
 # (条件)? A Or B 是 if；OK 是普通内建（流控返回）；表达式位置的 [] {} 是数组/KV，语句位置的 [] 是调用
-# 同一行里语句级的 (a) b 是 ((a) b)，换行或 ; 结束语句；a.k 取对象的键；(> 2x + 3y <= 9) / [> a == b]? 是唯一有中缀的地方（头必须是 >）
+# 同一行里语句级的 (a) b 是 ((a) b)，换行或 ; 结束语句；(> 2x + 3y <= 9) / [> a == b]? 是唯一有中缀的地方（头必须是 >）
+# 点：o.k 取键；o.[k a] 即 [o.k a]（方法调用，JS 的 OOP）；x..(f a) 即 (f x a)（管道）；(f x)?.{ … } 即 (As (f x) (=> (u) …))；(f).{ … } 即 (f (=> (u) …))
+# 模板字符串：\`a \${x} b\` 即 (str "a " x " b")，可多行；tag\`a \${x}\` 即 (tag ["a " ""] x)（tag 与 \` 之间不能有空白）
+# 可选参数：(=> (x ..) [xargs {a_ 1 b_ 2}] …)：.. 收集多出来的实参，按序给 a_ b_（NO 或缺省取默认值）；(xargs) 返回收集到的实参数组
 # 注释：# 到行尾（但 #66ccff 这样的十六进制颜色是字面量），#@ … @# 可跨行；; 是语句分隔符（在表达式里与空白等价）
 # 字面量（都是字符串）：#66ccff 颜色、./a/b.wtf 与 ../x 路径
 @skip /(?:[\\s,;]|#@[\\s\\S]*?@#|#(?!${HEXB})[^\\n]*)+/
-@color Num=B Coef=B Str=Y Qs=Y Lit=Y
+@color Num=B Coef=B Str=Y Qs=Y Lit=Y Tbeg=Y Tbeg1=Y Tend=Y
 @walk lisp
 Lisp   (Stmt *) :global :tag("..")
 Stmt   Exp (Same *) :lstmt
 Same   Exp :lsame
 Exp    ((Chain ("?" Recur "Or" Recur ?) :if) :setRecur)
 Chain  Atom (Dot *) :chain
-Dot    "." (List Brk Str Dkey <)
-Atom   (Mono Num Str Lit Lam Let Set Defn List Brk Obj Name <)
+Dot    ((".." (List Brk <) :dpipe) (("?.{" ".{" <) (Recur *) "}" :par :cb) ("." (Mcall Str Dkey <)) Ttag <)
+Mcall  (("(" Dkey (Recur *) ")" :par) ("[" Dkey (Recur *) "]" :par) <) :mcall
+Atom   (Mono Num Str Lit Lam Let Set Defn Xargs Tpl List Brk Obj Name <)
 Lam    ((/\\((?=\\s*=>)/ "=>" Params (Recur *) ")" :par) (/\\[(?=\\s*=>)/ "=>" Params (Recur *) "]" :par) <) :fn
 Let    ((/\\((?=\\s*-\\s+${SYM}+\\s)/ "-" Var Recur ")" :par) (/\\[(?=\\s*-\\s+${SYM}+\\s)/ "-" Var Recur "]" :par) <) :let
 Set    ((/\\((?=\\s*->\\s+${SYM}+\\s)/ "->" Var Recur ")" :par) (/\\[(?=\\s*->\\s+${SYM}+\\s)/ "->" Var Recur "]" :par) <) :set
 Defn   "def" Var Params (Block Recur <) :defn
 Block  ":" (Stmt *) "..." :lblock
-Params (("(" (Pname *) ")" :par) ("[" (Pname *) "]" :par) <) :arg2nth
+Params (("(" (Pname *) (Rest ?) ")" :par) ("[" (Pname *) (Rest ?) "]" :par) <) :arg2nth
+Rest   /\\.\\./
+Xargs  ((/\\((?=\\s*xargs\\s*\\{)/ "xargs" Obj ")" :par) (/\\[(?=\\s*xargs\\s*\\{)/ "xargs" Obj "]" :par) <) :xargs
 List   ("(" (Recur *) ")" :par :lcall)
 Brk    ("[" (Recur *) "]" :par :tag("[]") :lbrk)
 Obj    ("{" (Pair *) "}" :par :tag("{}"))
 Pair   (Qs Key <) Recur
 Key    /${SYM}+/
-Dkey   /(?![/])${SYM}+/ :dkey
+Dkey   /(?![/])${SYM}+/ :lit
 Num    /-?\\d+(\\.\\d+)?/ :num
-Lit    /(?:${HEX}|[.]{1,2}[/][^\\s()\\[\\]{}",;?]+)/ :lit
+Lit    /(?:${HEX}|[.]{1,2}[/][^\\s()\\[\\]{}",;?\\x60]+)/ :lit
 Mono   Coef Name :lmono
-Coef   /-?\\d+(\\.\\d+)?(?=[^\\s()\\[\\]{}",;?.\\d])/ :num
+Coef   /-?\\d+(\\.\\d+)?(?=[^\\s()\\[\\]{}",;?.\\x60\\d])/ :num
 Qs     /${STR}/ :str
 Str    /${STR}/ :str :strlit
 Var    /${SYM}+/
 Pname  /${SYM}+/
+Tpl    (Tbeg (Hole *) "\`") :tpl
+Ttag   (Tbeg1 (Hole *) "\`") :ttag
+Hole   "\${" Recur Tend
+Tbeg   /\\x60${TCH}/
+Tbeg1  /(?<=[^\\s,;])\\x60${TCH}/
+Tend   /\\}${TCH}/
 Name   /(?!Or(?!${SYM}))${SYM}+/ :ref`
 
 /* ======================= ② 求值 walker =======================
@@ -193,7 +257,7 @@ const B = {
   '*': (...a) => a.reduce((x, y) => x * y, 1), '/': (a, b) => a / b, '%': (a, b) => a % b,
   '>': (a, b) => a > b, '<': (a, b) => a < b, '>=': (a, b) => a >= b, '<=': (a, b) => a <= b,   // (> a > b) 等中缀脱糖成这些二元调用
   '==': eq, '!=': (a, b) => !eq(a, b), isnt: a => !truthy(a), both: (a, b) => truthy(a) ? b : a,
-  '->': (o, k, v) => { const p = v === undefined ? k : { [k]: v }; return Object.assign(o, isPlain(o) ? p : Object.fromEntries(Object.entries(p).map(([a, b]) => [a, toJS(b)]))) },   // o.[-> {…}] / o.[-> "k" v]：原地合并并返回 o（JS 对象上的 Lisp 函数转成回调）；名字 + 对象字面量由 Walk['->'] 做局部部分赋值
+  '->': (o, k, v) => { const p = v === undefined ? k : { [k]: v }; return Object.assign(o, isPlain(o) ? p : Object.fromEntries(Object.entries(p).map(([a, b]) => [a, toJS(b)]))) },   // o..[-> {…}] / o..[-> "k" v]：原地合并并返回 o（JS 对象上的 Lisp 函数转成回调）；名字 + 对象字面量由 Walk['->'] 做局部部分赋值
   at: (a, i) => { const r = a?.at?.(i); return r === undefined ? NO : r },
   get: (o, k) => { const v = o?.[k]; return v === undefined ? NO : bindTo(v, o) }, len: a => a.length, keys: o => Object.keys(o), list: (...a) => a,
   str: (...a) => a.map(x => show(x)).join(''), concat: (...a) => [].concat(...a), push: (a, ...x) => [...a, ...x],
@@ -203,6 +267,8 @@ const B = {
   map: gen(function* (a, f) { const r = []; for (const x of a) r.push(yield* call(f, [x])); return r }),
   filter: gen(function* (a, f) { const r = []; for (const x of a) if (truthy(yield* call(f, [x]))) r.push(x); return r }),
   mapNotNO: gen(function* (a, f) { const r = []; for (const x of a) { const y = yield* call(f, [x]); if (y !== NO) r.push(y) } return r }),
+  // (As 值 f)，即 值?.{ … }：数组逐项 f 并丢掉 NO（mapNotNO），假值（NO/false/null）原样返回，否则 (f 值)
+  As: gen(function* (v, f) { return Array.isArray(v) ? yield* B.mapNotNO(v, f) : truthy(v) ? yield* call(f, [v]) : v }),
   reduce: gen(function* (a, f, z) { for (const x of a) z = yield* call(f, [z, x]); return z }),
   each: gen(function* (a, f) { let i = 0; for (const x of a) yield* call(f, [x, i++]); return a }),
   new: (C, ...a) => fromJS(new C(...a.map(toJS))),
@@ -243,9 +309,9 @@ const Walk = {
   *'$$'(x, env) { return glookup(x, env) },
   *''(x) { return x[1] },
   // ["()", f, ...args]：调用
-  *'()'(x, env) { return yield* apply(x.slice(1), env, null, x) },
+  *'()'(x, env, stmt) { return yield* apply(x.slice(1), env, x, stmt) },
   // ["[]", ...]：语句位置是调用，表达式位置是数组
-  *'[]'(x, env, stmt) { return stmt ? yield* apply(x.slice(1), env, null, x) : yield* evAll(x.slice(1), env) },
+  *'[]'(x, env, stmt) { return stmt ? yield* apply(x.slice(1), env, x, stmt) : yield* evAll(x.slice(1), env) },
   *'..'(x, env) { return yield* evAll(x.slice(1), env) },
   // ["{}", [键, 值]...]
   *'{}'(x, env) {
@@ -272,18 +338,21 @@ const Walk = {
     const o = yield* ev(rhs, env), cur = env.find(x[1])?.m.get(x[1]), v = { ...(cur && typeof cur == 'object' ? cur : null), ...o }
     env.m.set(x[1], v); return v
   },
-  // [".", 基, 调用]：基插为调用的第一个实参
-  *'.'(x, env, stmt) {
-    const b = yield* ev(x[1], env, stmt), c = x[2]
-    if (isT(c) && c[0] == '') return B.get(b, c[1])      // o.k / o."k"：取键
-    if (!isT(c) || (c[0] != '()' && c[0] != '[]')) throw new LispErr(tr`. 之后应为 (..) 或 [..] 或键`, x)
-    return yield* apply(c.slice(1), env, [b], c)
+  // ["xargs", {键 默认值…}]（源码 [xargs {a_ 1 b_ 2}]）：参数表以 .. 结尾时，多出来的实参按书写顺序依次成为 a_ b_；缺省或 NO 取默认值（默认值只在需要时求值）
+  *xargs(x, env) {
+    const e = env.find('..'); if (!e) throw new LispErr(tr`[xargs ..] 需要参数表以 .. 结尾`, x)
+    const rest = e.m.get('..'); let i = 0
+    for (const [k, d] of x[1].slice(1)) { const g = rest[i++]; env.m.set(k, g !== undefined && g !== NO ? g : yield* ev(d, env)) }
+    return NO
   },
+  // [".", 基, 键]：o.k / o."k" 取键；JS 对象上的方法取出来时绑定 this（所以 o.[k a] 就是 JS 的 o.k(a)）
+  *'.'(x, env, stmt) { return B.get(yield* ev(x[1], env, stmt), x[2][1]) },
 }
-function* apply(items, env, pre, x) {
-  if (!items.length) return pre ? pre[0] : NO
-  const f = yield* ev(items[0], env), args = pre ? [...pre] : []
-  for (const y of items.slice(1)) args.push(yield* ev(y, env))
+function* apply(items, env, x, stmt) {
+  if (!items.length) return NO
+  const k = stmt && x.cs ? x.cs - 1 : -1             // 点号链的“基”在 items 里的下标：它继承语句位置（[len a]..[+ 1] 里的 [len a] 是调用）
+  const f = yield* ev(items[0], env, k == 0), args = []
+  for (let j = 1; j < items.length; j++) args.push(yield* ev(items[j], env, j == k))
   return yield* call(f, args, x)
 }
 // Lisp 值 ⇄ JS 值：NO↔undefined；Lisp 函数交给 JS 时包成回调（同一函数同一包装，可 removeEventListener）
@@ -295,7 +364,9 @@ const thenable = v => v && typeof v.then == 'function'
 function* call(f, args, x) {
   let v
   if (f && f.t == 'fn') {
-    const e = new Env(f.env); f.params.forEach((p, i) => e.m.set(p, i < args.length ? args[i] : NO))
+    const e = new Env(f.env), ps = f.params, rest = ps.at(-1) == '..', n = rest ? ps.length - 1 : ps.length
+    for (let i = 0; i < n; i++) e.m.set(ps[i], i < args.length ? args[i] : NO)
+    if (rest) { const r = args.slice(n); e.m.set('..', r); e.m.set('xargs', Object.assign(() => r, { bname: 'xargs' })) }   // .. 参数收集多出来的实参；(xargs) 返回它们
     v = yield* body(f.body, e, f.node, L.host?.last)
   } else if (typeof f == 'function') {
     if (f.lisp) return yield* call(f.lisp, args, x)                      // 交给过 JS 的回调又回到 Lisp：还原
@@ -386,7 +457,7 @@ const hostOf = (...layers) => {
   const own = n => { for (const l of layers) { const o = typeof l == 'function' ? l() : l; if (o != null && n in Object(o)) return Object(o) } }
   return { has: n => !!own(n), get: n => { const o = own(n); return bindTo(o[n], o) } }
 }
-const fns = new Set([...Object.keys(B), 'w@'])
+const fns = new Set([...Object.keys(B), 'w@', 'xargs'])
 P.walkers.lisp = { run, steps, node, show, fname, builtins: new Set([...fns, 'NO']) }
 // Calc：同一个 walker，程序取最后一句的值
 P.walkers.calc = { ...P.walkers.lisp, run: prog => drive(steps(prog, prog, true)), steps: (ast, prog) => steps(ast, prog, true) }
@@ -400,23 +471,32 @@ P.examples.splice(4, 0, {
 }, {
   name: '四则运算（朴素 Chain）', rules: CHAIN, input: `1 - 2 - 3 + 4 * (5 - 2) / 6`,
 }, {
-  name: 'Lisp', rules: RULES, input: `# 语句位置的 [..] 是调用；[e1].[e2] 即 (e1).(e2 ..) 即 [e2 [e1] ..]
-[- big (=> (xs n) xs.(mapNotNO (=> (x) (> x > n)? x Or NO)))]
+  name: 'Lisp', rules: RULES, input: `# 语句位置的 [..] 是调用；x..(f a) 是管道：(f x a)；o.k 取键，o.[k a] 即 [o.k a]（对象的方法调用，不是管道）
+[- big (=> (xs n) xs..(mapNotNO (=> (x) (> x > n)? x Or NO)))]
 def fact(n) (> n <= 1)? 1 Or (> n * (fact (> n - 1)))
-[- inc1 (=> (a) [len a].[+ 1])]
+[- inc1 (=> (a) [len a]..[+ 1])]
 (- user {name "parviz" langs ["js" "lisp"]})
-(- older user.[-> "age" 40])
-(w@ "fact 5 =" (fact 5) "big:" [3 14 15 9 26].(big 10) user.name older.age (inc1 [1 2 3]))
+(- older user..[-> "age" 40])
+# 可选参数：参数表末尾的 .. 收集多出来的实参，[xargs {…}] 按序命名它们（名字以 _ 结尾），(xargs) 是收集到的数组；模板字符串可多行
+def greet(who ..):
+  [xargs {title_ "Dr." n_ 1}]
+  (OK \`\${title_} \${who} ×\${n_}，另有 \${(len (xargs))} 个\`)
+...
+(w@ "fact 5 =" (fact 5) "big:" [3 14 15 9 26]..(big 10) user.name older.age (inc1 [1 2 3]))
+(w@ (greet "ann") (greet "bo" "Prof." 2))
+# ?.{ } 即 (As 值 (=> (u) …))：数组逐项处理并丢掉 NO，假值原样，否则 (f 值)；(f).{ } 把回调追加成最后一个实参
+(w@ [1 2 3]?.{ (> u * 2) } user.nope?.{ (> u + 1) } older.age?.{ (> u + 1) } (map [1 2 3]).{ (> u * u) })
 def poly(x y):
   [-> t (> 2x + 3y > 7)]
   (OK (both t (> x != y)))
 ...
 (w@ (poly 2 3) (poly 0 1))
-(OK [123].(mapNotNO (=>(x) (> x > 10)? x Or NO )).[at 0] )`,
+(OK [123]..(mapNotNO (=>(x) (> x > 10)? x Or NO ))..[at 0] )`,
 }, {
   name: 'Lisp（作用域/错误）', rules: null, same: 'Lisp', input: `[- k 10]
-[- add (=> (a b) [- s (+ a b)] (OK s.[+ k]))]
+[- add (=> (a b) [- s (+ a b)] (OK s..[+ k]))]
 def twice(f x) (f (f x))
+def opt(a ..): [xargs {b 1}] (OK a) ...   # 可选参数名必须以 _ 结尾
 [- c 1]
 [-> c 2]
 (w@ (twice (=> (y) (add y 1)) 5) undefinedName)
