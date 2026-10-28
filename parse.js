@@ -40,7 +40,7 @@ const feed = (src, file = 'feed$A', i = 0) => {
   return ss
 }
 const sticky = rx => rx && new RegExp(rx.source, rx.flags.replace(/[gy]/g, '') + 'y')
-const ws = ss => { const k = ss.skip; if (!k || ss.st) return; k.lastIndex = ss.i; const m = k.exec(ss.src); if (m) ss.i += m[0].length }
+const ws = ss => { const k = ss.skip; if (!k || ss.st || ss.col) return; k.lastIndex = ss.i; const m = k.exec(ss.src); if (m) ss.i += m[0].length }   // ss.col>0：@skip some 下处在 @color 规则内，不自动跳空格
 const wpos = ss => { const i = ss.i; ws(ss); const r = ss.i; ss.i = i; return r }
 
 /* ---------- 跟踪（步进可视化用） ---------- */
@@ -272,9 +272,11 @@ const fn = (p, f, name) => {
 // 具名规则：形成 CST 层级与调用栈帧；规则体是有序选择时记下选中的分支 N.alt（显示为 Val.A、Val.B…）
 const rule = (name, get) => {
   const p = ss => {
-    const a0 = ss.i, body = get()
+    const a0 = ss.i, body = get(), col = ss.some && ss.g.colors[name.split('(')[0]] !== undefined
+    if (col) { ws(ss); ss.col++ }   // @skip some：进入有颜色的规则前，在外层（无色）状态里先跳空格，规则内部不再跳
     if (!ss.mute) { const a = wpos(ss); ss.stack.push({ label: name, a }); tr(ss, 'in', name, a, a) }
     const n = body(ss)
+    if (col) ss.col--
     if (!ss.mute) ss.stack.pop()
     if (!n) { ss.i = a0; tr(ss, 'out', name, a0, a0, null, false); return null }
     const N = new Node('rule', n.a, n.b, [n]); N.r = name; N.v = n.v
@@ -299,7 +301,7 @@ const eat = (p, ss) => {
   let g = null
   if (p && p.start) { g = p; p = g.start } else p = to(p)
   if (ss.skip === undefined) ss.skip = g ? g.skip : /\s+/
-  ss.skip = sticky(ss.skip); ss.pairs = g ? g.pairs : []; ss.g = g; if (g) ss.builtins = g.builtins
+  ss.skip = sticky(ss.skip); ss.pairs = g ? g.pairs : []; ss.g = g; ss.some = !!g?.some; ss.col = 0; if (g) ss.builtins = g.builtins
   Object.assign(ss, { far: -1, exp: new Set, stack: [], recur: [], closers: [], sync: EOF, spec: 0, alts: [] })
   let n = null, crash = null
   try { n = p(ss) } catch (e) { if (!(e instanceof RangeError) && !/Recur/.test(e.message)) throw e; crash = e }
@@ -316,13 +318,19 @@ const eat = (p, ss) => {
 /* ---------- 标签式 AST：[tag, ...kids] ----------
    一切结构都是“多态调用”：[fact 5] 即 ["()", ["", "fact"], 5]；"=" "=>" ".." "?" 也只是 tag，由 walker 按 tag 分派。
    数组上隐藏 node（CST 节点）与 ns（每个 kid 对应的 CST 节点，原始值 kid 显示用）。 */
+class Tg extends Array { static get [Symbol.species]() { return Array } }   // 标签节点：普通属性 node/ns 比 defineProperty 便宜；slice/map 仍得到普通数组
 const isT = k => Array.isArray(k) && typeof k[0] == 'string' && !!k.node
 const T = (tag, kids, n, ns = [], view = true) => {
-  const a = [tag, ...kids]
-  Object.defineProperty(a, 'node', { value: n }); Object.defineProperty(a, 'ns', { value: ns })
+  const a = new Tg(kids.length + 1); a[0] = tag
+  for (let i = 0; i < kids.length; i++) a[i + 1] = kids[i]
+  a.node = n; a.ns = ns
   if (view) n.view = viewOf(a)
   return a
 }
+// 叶子节点（名字 "$" / 全局键 "$$" / 字符串字面 ""）：不分配 kids 临时数组；ns 共用一个空数组（叶子的 kid 就是节点自己，没人按 ns 取）
+const NS0 = Object.freeze([])
+const leaf = (tag, v, n) => { const a = new Tg(2); a[0] = tag; a[1] = v; a.node = n; a.ns = NS0; return a }
+const isName = t => t === '$' || t === '$$'
 // 产生某节点值的各组成部分对应的 CST 节点（与 vals() 一一对应）
 const parts = n => {
   if (!n) return []
@@ -343,11 +351,11 @@ function viewOf(a) {
   const [tag, ...ks] = a, ns = a.ns, from = (b, i0 = 0) => ks.slice(i0).map((k, i) => kidOf(k, ns[i + i0], b)).filter(Boolean)
   if (tag == '()' || tag == '[]') {
     const c = ks[0]
-    return isT(c) && c[0] == '' ? { tag: c[1], h: c.node, kids: from(a, 1), node: a.node, x: a } : { tag: tag == '[]' ? '..' : '()', kids: from(a), node: a.node, x: a }
+    return isT(c) && isName(c[0]) ? { tag: c[1], h: c.node, kids: from(a, 1), node: a.node, x: a } : { tag: tag == '[]' ? '..' : '()', kids: from(a), node: a.node, x: a }
   }
   if (tag == '.') {
     const [b, c] = ks, bk = kidOf(b, ns[0], a)
-    if (isT(c) && (c[0] == '()' || c[0] == '[]') && isT(c[1]) && c[1][0] == '')
+    if (isT(c) && (c[0] == '()' || c[0] == '[]') && isT(c[1]) && isName(c[1][0]))
       return { tag: c[1][1], h: c[1].node, kids: [bk, ...c.slice(2).map((k, i) => kidOf(k, c.ns[i + 1], c)).filter(Boolean)], node: c.node, x: a }
     return { tag: '.', kids: [bk, kidOf(c, ns[1], a)].filter(Boolean), node: a.node, x: a }
   }
@@ -358,10 +366,16 @@ function viewOf(a) {
    引用产生 free=[{name,node}]，定义产生 defs=[{name,node,kind}]，二者随 CST 自底向上汇总；
    bind 在某个节点处用 defs 消解 free（node.def 指向定义；引用不染色，只有声明 G、参数 P 上色）。
    语法里用 :ref :def :param :scope :arg2nth :fn :let :defn :global 组合出任何“定义/lambda”语法：
-   (=> (a b) e)、[= f (=> (a b) e)]、def f(a b) e 得到完全相同的 AST 与作用域。 */
+   (=> (a b) e)、[- f (=> (a b) e)]、def f(a b) e 得到完全相同的 AST 与作用域。 */
+// 同一作用域里 [- x ..] / def 定义的名字不能再被 [-> x ..] 改变
+const checkImmut = defs => {
+  for (const d of defs) if (d.kind == 'mut') { const i = defs.find(e => e.name == d.name && (e.kind == 'var' || e.kind == 'fn')); if (i) d.node.err = f`${d.name} 由 - 定义，不能用 -> 改变` }
+}
 const bind = (n, defs) => {
+  if (defs && defs.length) checkImmut(defs)
   if (!n.free || !defs || !defs.length) return
-  const m = new Map(defs.map(d => [d.name, d]))
+  const m = new Map
+  for (const d of defs) if (!m.has(d.name)) m.set(d.name, d)   // 同名取最先的定义（-> 的首次赋值即初始化）
   n.free = n.free.filter(r => {
     const d = m.get(r.name); if (!d) return true
     if (r.node !== d.node) { r.node.def = d.node; if (d.kind == 'param') r.node.c = 'P' }   // 引用保持原色：G 只标声明
@@ -370,8 +384,8 @@ const bind = (n, defs) => {
 }
 const nameOf = (v, n, ss) => typeof v == 'string' ? v : ss.src.slice(n.a, n.b)
 const lexscope = {
-  // 名字引用 → ["", name]
-  ref: (v, n, ss) => { const name = nameOf(v, n, ss); n.free = [{ name, node: n }]; return T('', [name], n, [n], false) },
+  // 名字引用 → ["$", name]；顶层 :global 绑定不上的（内建 / 未定义）改成 ["$$", name]：全局键，运行时不用查作用域链
+  ref: (v, n, ss) => { const name = nameOf(v, n, ss), x = leaf('$', name, n); n.free = [{ name, node: n, x }]; return x },
   // 单个词条定义 / 参数（元语法的规则名、规则参数用）
   def: (v, n, ss) => { n.defs = [{ name: nameOf(v, n, ss), node: n, kind: 'rule' }]; n.c = 'G'; return v },
   param: (v, n, ss) => { n.defs = [{ name: nameOf(v, n, ss), node: n, kind: 'param' }]; n.c = 'P'; return v },
@@ -389,17 +403,23 @@ const lexscope = {
     bind(n, n.defs); n.defs = null
     return T('=>', [ps, ...(many ? body : [body])], n, [pn[0], ...(many ? parts(pn[1]) : [pn[1]])])
   },
-  // [名字, 值] → ["=", 名字, 值]；名字定义到外层作用域，值是 lambda 时为函数
+  // [名字, 值] → ["=", 名字, 值]（源码 [- 名字 值]）；名字定义到外层作用域，不可被 -> 改变；值是 lambda 时为函数
   let: (v, n) => {
     const [name, val] = v, pn = parts(n), tk = leaves(pn[0])[0], isFn = isT(val) && val[0] == '=>'
     if (tk) { if (isFn) tk.c = 'G'; (n.defs ||= []).push({ name, node: tk, kind: isFn ? 'fn' : 'var' }) }
     return T('=', [name, val], n, pn)
   },
-  // [名字, 参数表, 体] → ["=", 名字, ["=>", 参数表, 体]]，与 let + fn 等价
+  // [名字, 值] → ["->", 名字, 值]：当前作用域内（若无则初始化）局部赋值，同一作用域可反复赋值，不能改变 - 定义的名字
+  set: (v, n) => {
+    const [name, val] = v, pn = parts(n), tk = leaves(pn[0])[0]
+    if (tk) (n.defs ||= []).push({ name, node: tk, kind: 'mut' })
+    return T('->', [name, val], n, pn)
+  },
+  // [名字, 参数表, 体 | [语句...]] → ["=", 名字, ["=>", 参数表, 体...]]，与 let + fn 等价；体是 :block 的语句数组时展开
   defn: (v, n) => {
-    const [name, ps, body] = v, pn = parts(n), tk = leaves(pn[0])[0]
+    const [name, ps, body] = v, pn = parts(n), tk = leaves(pn[0])[0], many = Array.isArray(body) && !isT(body)
     bind(n, n.defs); n.defs = null
-    const lam = T('=>', [ps, body], n, [pn[1], pn[2]], false)
+    const lam = T('=>', [ps, ...(many ? body : [body])], n, [pn[1], ...(many ? body.ns : [pn[2]])], false)
     if (tk) { tk.c = 'G'; n.defs = [{ name, node: tk, kind: 'fn' }] }
     return T('=', [name, lam], n, [pn[0]])
   },
@@ -407,8 +427,8 @@ const lexscope = {
   global: (v, n, ss) => {
     bind(n, n.defs)
     for (const r of n.free || []) {
-      if (ss.builtins.has(r.name)) continue
-      r.node.err = f`未定义 ${r.name}`
+      r.x[0] = '$$'
+      if (!ss.builtins.has(r.name)) r.node.err = f`未定义 ${r.name}`
     }
     return v
   },
@@ -579,7 +599,11 @@ function grammar(text, opt = {}) {
       const h = S[0], M = mparse(S)
       if (h.t == 'dir') {
         const a = S.slice(1)
-        if (h.v == 'skip') g.skip = a[0]?.t == 're' ? new RegExp(a[0].v) : a[0]?.v == 'none' ? null : (() => { throw new MErr(f`@skip /re/ 或 none`, h) })()
+        if (h.v == 'skip') {
+          const some = a[0]?.v == 'some', r = a[some ? 1 : 0]
+          g.some = some
+          g.skip = r?.t == 're' ? new RegExp(r.v) : a[0]?.v == 'none' ? null : some ? /\s+/ : (() => { throw new MErr(f`@skip /re/ 或 none 或 some [/re/]`, h) })()
+        }
         else if (h.v == 'start') throw new MErr(f`没有 @start：第一条规则就是起始规则`, h)
         else if (h.v == 'color') for (let j = 0; j < a.length; j += 3) { if (a[j + 1]?.t != '=' || !a[j + 2]) throw new MErr(f`@color Name=B`, a[j]); g.colors[a[j].v] = a[j + 2].v }
         else if (h.v == 'builtin') a.forEach(x => g.builtins.add(x.v))
@@ -703,7 +727,7 @@ Name    /[A-Z]\\w*/ :ref
 ${META_BODY}`
 examples.push({ name: 'Meta v1（纯结构）', input: META_V1, rules: META_V1 }, { name: 'Meta v2（自描述 + Lexscope）', input: META, rules: META })
 
-const P = { FAIL, EOF, Node, walk, feed, eat, ws, re, lit, kw, seq, alt, opt, many, join, par, fn, rule, mark, recur, prec, to, bind, funcs, lexscope, T, isT, parts, viewOf, grammar, mtok, examples, META, META_V1, errsOf, f }
+const P = { FAIL, EOF, Node, walk, feed, eat, ws, re, lit, kw, seq, alt, opt, many, join, par, fn, rule, mark, recur, prec, to, bind, funcs, lexscope, T, leaf, isT, isName, parts, viewOf, grammar, mtok, examples, META, META_V1, errsOf, f }
 P.funcs = {}    // 供其他模块（lisp.js）注册额外 :func
 P.walkers = {}  // @walk name：Ctrl+Enter 时对解析结果执行的遍历器 { run(value), steps(value), node(ast, value) }
 if (typeof module != 'undefined') module.exports = P

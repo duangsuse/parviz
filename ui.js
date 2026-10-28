@@ -275,7 +275,7 @@ function gDOM(g, o) {
     if (p.kind == 'prec') return box('- 算符表', [pv(p.parts[0]), ...p.levels.flatMap((L, l) => [l ? tk('', ';') : null, ...L.map(pv)]).filter(Boolean)], ++id)   // 操作数 + 各级（; 分隔，越往后越紧）
     return box(p.kind == 'fn' ? p.fname : OPS[p.kind], p.parts.filter(Boolean).map(pv), ++id)
   }
-  const hd = h('div', 'gh', `起始 ${g.startName}  @skip ${g.skip ? '/' + g.skip.source + '/' : 'none'}${g.walk ? '  @walk ' + g.walk : ''}  配对 ${g.pairs.map(p => p.join('')).join(' ') || '∅'}  颜色 ${Object.entries(g.colors).map(kv => kv.join('=')).join(' ') || '∅'}`)
+  const hd = h('div', 'gh', `起始 ${g.startName}  @skip ${g.some ? 'some ' : ''}${g.skip ? '/' + g.skip.source + '/' : 'none'}${g.walk ? '  @walk ' + g.walk : ''}  配对 ${g.pairs.map(p => p.join('')).join(' ') || '∅'}  颜色 ${Object.entries(g.colors).map(kv => kv.join('=')).join(' ') || '∅'}`)
   const out = h('div', 'tree', hd)
   for (const [key, I] of g.insts) {
     const name = key.replace(/\[.*$/, ''), label = key.replace(/^(\w+)\[(.*)\]$/, '$1($2)')
@@ -521,7 +521,7 @@ function tryShift(old, now) {
     newT = mm[0]
   } else {
     const ga = prev ? prev.b : 0, gb = next ? next.a : old.length
-    if (a < ga || b > gb || !ss.skip) return false
+    if (a < ga || b > gb || !ss.skip || ss.some) return false   // @skip some：空白是否被跳过取决于所在规则，交给重解析
     const ng = now.slice(ga, gb + d)
     if (!ng.length && gb > ga) return false
     if (ng.length) { ss.skip.lastIndex = 0; const mm = ss.skip.exec(ng); if (!mm || mm[0].length != ng.length) return false }
