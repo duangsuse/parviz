@@ -1,0 +1,9 @@
+# 03 高阶内建 / ?.{ } / .{ }
+- xs [1 2 3 4 5 6]
+w@ (map xs [-x]> $(x * x))
+w@ (filter xs [-x]> $(x % 2 == 0))
+w@ (reduce xs [-a-b]> $(a + b) 0)
+w@ xs?.{ $(u * 10) }
+w@ (map xs).{ $(it + 1) }
+w@ (mapNotNO xs [-x]> $(x > 3)? x Or NO)
+w@ (map (range 4) [-i]> $(i * 2))

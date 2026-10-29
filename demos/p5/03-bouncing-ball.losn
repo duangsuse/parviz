@@ -1,0 +1,24 @@
+# 03 弹球：see 物理帧（20 Hz）+ tick 重画
+createCanvas 480 320
+frameRate 60 20
+[noStroke]
+- gravity 1.2 - ball {x 240 y 60 vx 9 vy 0 r 18}
+
+def if-wall(x r w vx):
+  is $(x + r > w)? (neg (abs vx))
+  Or $(x < r)? (abs vx)
+  Or vx
+...
+def floor-hit():
+  {->ball {y $(height - ball.r)  vy $(it * -0.92)}}
+...
+see.{
+  {->ball {vx (if-wall ball.x ball.r width it)  vy $(it + gravity)}}
+  {->ball {x $(it + ball.vx)  y $(it + ball.vy)}}
+  $(ball.y + ball.r > height)? (floor-hit) Or NO
+}
+tick.{
+  background 17 17 27
+  fill 249 226 175
+  circle ball.x ball.y $(ball.r * 2)
+}

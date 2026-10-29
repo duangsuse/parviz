@@ -1,0 +1,12 @@
+# 25 弹簧跟随：lerp 与拖尾
+createCanvas 480 320
+[noStroke]
+- st {x 240 y 160}
+tick.{
+  background 16 16 26 60
+  {->st {x (lerp st.x mouseX 0.08)  y (lerp st.y mouseY 0.08)}}
+  fill 120 220 255 90
+  circle st.x st.y 46
+  fill 240
+  circle st.x st.y 10
+}

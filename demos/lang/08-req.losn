@@ -1,0 +1,6 @@
+# 08 req：把另一个模块执行完，返回它的值（同一路径只执行一次）
+- m (req ./08-mod.losn)
+w@ (m.twice 21) m.name
+- m2 (req ./08-mod.losn)
+w@ $(m == m2)
+req ./08-mod.losn

@@ -272,3 +272,33 @@ grabug([{ctx:Runner.instance_.horizon.canvasCtx, cssHover:''},
 
 ;(_1=Runner.instance_).gameOver=()=>{_1.onKeyDown({keyCode:32, preventDefault (){} })}
 ```
+
+# losn
+
+Lisp的问题，在于我需要能给app用的lisp，所以OOP兼容和Nim风格UFCS就有很大争夺。我已经过了一遍现存写法来收拢 ()[]{} 的位置语义
+
+赋值和参数化、调用和链、重赋值和键，这些语法有颠覆式更新：
+
+ ([-x]> x + 1) 0 仍然是并列调用，行首单方法如 imp.alert "wtf" 仍然翻译为 globalThis.(alert "wtf") ，非[A-Z]非"imp"自由变量在有(u)参数时，视为u.key或u.(fn)。 ?.{} 引入的是u， .{} 的首参是it
+
+- v "val" - v1 0 是单赋值，只能在语句位置，无括号，无需分号。 全局模块视为一个大函数，通过 req ./xx.losn 执行导入到 - xx
+
+方括号调用【只能】在语句位置 ([-]> 这里不算语句)。在参数位置总是列表， .[位置] 相当于 arr.(at_ [0]) 下标
+
+唯独有 [-]>, -, $, ? 几个字逃逸lisp风格。[-xs-n]> xs?.{ $(u > n)? x Or NO } 里if和mapNotNO仍然是那样，ON则是true。
+
+{} 和[]一样在语句位置，它替代现在的 (->)，比如 [-> t (> 2x + 3y > 7)] 改成 {t $(2x + 3y > 7)}
+user..[-> "age" 40] 改成 {->user {"age" $(it + 1) } ->otherKV {}}，->键有it内联，不支持单"k" v赋值。参数位置就是{k v}，在 f.{it}.{it} 它仍然是追加函数式参数。它还支持 {- k v - k v} 的{-}语法
+
+[- f (=> (x) x)] 的语法改掉， - f [-x-y] {  } ， [-x]> x + 1 则可支持单语句和默认 $(infix)。原来的(>)(-)函数保持屏蔽
+
+def f(x y): ... 不再只是语法糖。你可以先 def Pair(A B) {- A - ["B"] B} （返回同键名对象/键名内插 无需new调用）， 或者省略写 
+
+之后的[^A-Z]的def就自动展开为含[-u]参数并注册 Pair.prototype.swap=转发this作为首参数u。  用 def OK 来取消这一状态。
+
+使用truthy—— 含length或size的值空是假，NaN,nulley是假，0是真                                                                                                                                                                      
+
+除了键名内插， w@打印、..(管道)、xargs、多项式和颜色/路径、ES6 templateStr call 还是一样，只是颜色和字符串要onedit热替换
+
+
+可能要另起一个 "LOSN Lisp" 语法和对应的walker文件，和extra.js 一样的加载。 调试功能上，仍然支持函数CST/函数名断点、闭包序列化，其他无要求。 考虑到lexscope框架并不为性能优化，这个解释器用【函数转译到js并缓存】的方法会更好

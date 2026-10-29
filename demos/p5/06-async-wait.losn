@@ -1,0 +1,21 @@
+# 06 异步：返回 Promise 的调用自动 await
+createCanvas 420 200
+background 30 30 46
+[noStroke]
+console.log "start" (Promise.resolve 42)
+
+[each (range 5)].{
+  fill $(50it) 150 220
+  circle $(50 + 80it) 100 50
+  wait 400
+}
+console.log "setup 结束,draw 才开始"
+
+- st {n 0}
+tick.{
+  {->st {n $(it + 1)}}
+  fill 255 st.n
+  textSize 18
+  text (str "tick " st.n) 20 $(170 + st.n % 3 * 10)
+  wait 1000
+}

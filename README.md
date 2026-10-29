@@ -10,7 +10,7 @@
 - 点一个位置，`→` 步进，`Shift+→` 连返回一起看；`F8` 在光标下的函数名上切换断点（暂停中 = 取消这里的断点并继续），`F9` 继续，`F10` 下一条语法语句（`@stmt` 声明的规则），`F11` 下一个事件（和 p5 页同一套键；`F8 中断` 输入框仍可按判断/返回名匹配）。主页默认用**弹框**呈现暂停（和 p5 页同一个组件，顶栏 `⏸` 可切 REPL）；Ctrl+E 目录树、Ctrl+S 保存也和 p5 页一致。
 - 树节点单击按当前工具处理，双击总是打 `[n]` 标记；`F12` 控制台里 `$1` 是输入流，`$2` 最后悬停节点，`$4` 最近结果，`$5..` 是AST标记。
 - 规则区本身也用元语言描述（`META` v2），所以规则区有高亮、引用跳转和“未定义规则”提示。
-- `p5.html`：不带调试器的独立页面，用 Lisp 写 p5.js 草图（toplevel = setup，`tick` = draw，自动 await，双击函数名设断点），见第四章。
+- `p5.html`：独立页面，用 **LOSN Lisp** 写 p5.js 草图（toplevel = setup，`tick` = draw，自动 await，双击函数名设断点；30 个示例来自 `demos/p5/`），见第四、五章。
 
 # 一、元语言：组合子、`/re/`
 
@@ -209,13 +209,18 @@ Mul   /[*\/]/
 | `ui/sloc.js` | 源码跨度 ↔ DOM 的角标 / 贝塞尔连线（两页共用） |
 | `ui/xref.js` | 引用热区：悬停箭头、跳定义、反查引用（两页共用） |
 | `ui/debug.js` | 两页共用的调试控制器：断点集合、帧边界、语句边界（不碰 DOM；p5 页键位 F8–F11，见 p5 一节） |
-| `p5/app.js` | p5 页面逻辑：宿主名字、tick/on/off、断点与暂停、Console、热编辑、示例 |
+| `p5/app.js` | p5 页面逻辑：宿主名字、tick/on/off、断点与暂停、Console、热编辑、示例（加载 `demos/p5/index.json`） |
 | `p5/pick.js` | 取源：亮点撒点 / 读回、bbox 兜底 |
 | `p5/fbuf.js` | 帧缓冲：画布副本 + 内存快照（含闭包环境）+ 调用清单 |
 | `ui/pause.js` + `ui/pause.css` | 两页共用的暂停视图：`REPL`（暂停行 + 输入框在 Console）/ `弹框`（源码光标处的气泡）两种呈现，同一套即时求值 / `(OK v)` / `? 条件` / `= 观察`；顶栏 `⏸` 按钮切换，选择存在 `localStorage['parviz.pause']`，两页一致 |
 | `ui/session.js` | 单文档会话：文本 + 文件句柄 + 脏标记（打开/保存/改名/切换；Ctrl+S 总是覆盖同名文件：已开目录 → 目录里按名字创建/覆盖，否则 `showSaveFilePicker` 选一次，只有两者都没有才下载；`detach()` = 编辑区改成示例，不再对应打开的文件） |
 | `ui/explorer.js` + `ui/explorer.css` | 目录树（Ctrl+E，两页都有）：自己建 DOM，`Explorer.mount({ session, status })`；FSA 句柄逐层加载，无 FSA 时退回文件选择 |
-| `p5/exec.js` | p5 的 7 个内置示例（数据） |
+| `losn.js` | **LOSN Lisp**：新语法的解析器 + 转译成 JS generator + 运行时（`(P) => ({ walkers, rules })`，和 `extra.js` 同一种加载） |
+| `demos/p5/*.losn` + `demos/p5/index.json` | 30 个类 Processing 示例（p5 页的示例下拉） |
+| `demos/lang/*.losn` | 10 个 LOSN 语言特性示例（`tools/smoke-losn.js` 当测试跑） |
+| `tools/smoke-losn.js` | LOSN 冒烟：语法 / 运行时 / 10 个 demo / 常量池·缓存·事件 / 30 个 p5 示例源码 |
+| `tools/p5-run.html` | 30 个 p5 示例的无头验收页（Chromium headless 手动推帧 + 画布覆盖率） |
+| `tools/p5-console.js` | 用真实 `p5.html#N` 打开每个示例，检查 Console 面板里的错误 / 警告 |
 | `p5/tweak.js` | 声明式调参部件：读顶层 `(tweak …)`（没写的按内置声明推断），颜色 / 位置 / 数字 / 角度 / 下拉 / 开关 / 按钮 |
 | `p5/pane.js` | Tweak 面板：参数控件、预设（保存 / 选择 / JSON 导出导入）、推断声明写入源码 |
 | `vendor/mithril.min.js` | Mithril 2.2.15（MIT）：免构建、离线可用 |
@@ -535,7 +540,18 @@ fact 5 = 120 big: [14 15 26] parviz 4
 
 ---
 
-# 四、`p5.html`：用 Lisp 写 p5.js
+# 四、`p5.html`：用 LOSN Lisp 写 p5.js
+
+> **语法提示**：`p5.html` 现在跑的是 **LOSN**（新语法，见第五章）。本章下面的完整示例沿用了旧 Lisp 的写法（`(f a)` / `[f]` / `(> a + b)` / `s..[-> {k v}]`），只对 `lisp.js` / 主页调试器有效；在 p5 页请按下表换成新语法。`(tweak …)` 声明、Tweak 面板、取源、帧缓冲的行为两套一致。
+>
+> | 旧（本章示例） | LOSN（p5 页） |
+> | --- | --- |
+> | `(- v e)` / `[-> t e]` | `- v e` / `{t $(e)}` |
+> | `(f a)` / `[f a]`（语句） | `(f a)` / `[f a]`（语句位置的 `[..]` 仍是调用） |
+> | `(> a + 2b)` | `$(a + 2b)` |
+> | `o..[-> {k v}]` | `{->o {k v}}` |
+> | `(=> (x) e)` / `tick.{ }` | `[-x]> e` / `tick.{ }`（不变） |
+>
 
 `p5.html` 不带调试器视图：左边编辑器（高亮同主页）+ Console（`#out`，与调试器共用 `ui/console.js`：错误行/暂停行悬停会在源码上连线、点击跳转，错误位置有 `E1` 角标），右边 Preview；`Ctrl+Enter` 运行，`Ctrl+Shift+Enter` 停止，`F9` 断点处继续。下拉框里有 7 个示例。p5.js 取自 CDN。多项式一律写成头是运算符的括号：`(> a + 2b)`、`(> a - b)`，比较写 `[> a <= b]?`（见 2.6）。
 
@@ -615,3 +631,89 @@ tick.{                    # 重画：60 fps
 
 ---
 
+
+# 五、LOSN Lisp：新语法 + 转译
+
+`losn.js` 是和 `lisp.js` 并存的第二套 Lisp：**独立文法 + 独立运行时**，执行方式是**把每个函数转译成 JS generator**（不再逐节点 tree-walk），常量进格子、调用点进表，结构签名相同的模板复用编译结果。`lisp.js` 一行没动，主页的旧 Lisp 示例和 `tools/smoke.js` 继续用它。
+
+页面：
+
+- `p5.html` —— 只用 LOSN：toplevel = setup，`tick.{ … }` 每个重画帧，`see.{ … }` 固定 20 Hz 物理帧，`on "事件".{ … }`，自动 await，双击函数名断点，画布取源，Tweak，帧缓冲，目录树。示例下拉来自 `demos/p5/index.json`（30 个 `/` 类 Processing 示例）。
+- `index.html` —— 旧 Lisp 调试器；`losn.js` 可以作为模块加载（`P.useMod`），不改变旧页面。
+
+## 5.1 两种位置
+
+| 写法 | 语句位置（行首 / `{}` 块内） | 参数位置（`( )`、`[ ]`、`{ }` 的值） |
+| --- | --- | --- |
+| `[f a]` | 调用 | 列表 |
+| `{k v}` | 重赋值 `{t e}` / 键更新 `{->o {k e}}` | KV 对象 |
+| `f a b` | 同一行并列即调用；换行结束语句 | —（要写 `(f a b)`） |
+| 中缀 | 无 | 只在 `$( )` 里 |
+
+```lisp
+- gravity 1.2 - ball {x 240 y 60 vx 9 vy 0 r 18}   # 一次可以写多个 -，同一行
+{->ball {vy $(it + gravity)}}                       # it = 该字段旧值；返回 ball
+{t $(2x + 3y > 7)}                                  # 重赋值（目标在前，值只能一个表达式）
+def if-wall(x r w vx):
+  is $(x + r > w)? (neg (abs vx))
+  Or $(x < r)? (abs vx)
+  Or vx
+...
+```
+
+- `[-x-y]> e`：单表达式 lambda（体按 `$(…)` 的中缀读法）；`[-x-y] { … }` 块 lambda；`tick [-] { … }` 零参块。
+- `f.{ … }` 把块追加成最后一个实参（首参叫 `it`）；`x?.{ … }` 是 `(As x 块)`（参数叫 `u`，数组逐项处理并丢掉 `NO`）。
+- `x..(f a)` 管道 → `(f x a)`；`o.k` 取键；`o.(k a)` 只调 `o` 自己的方法；`o.[i]` = `at_` 覆盖（数组 / 字符串 / Map 有默认）。
+- `` `a ${x}` ``、`` tag`a ${x}` ``、`[xargs {a_ 1}]` 可选参数、`imp.name` 访问宿主全局表。
+- `def Pair(A B) {- A - ["B"] B}`：大写名 = 类型定义，返回 `Object.create(Pair.prototype)`；之后的小写 `def` 自动成为方法（首参 `u`，注册到 `Pair.prototype`，JS 里 `p.get()` 可用）；`def OK` 取消。
+- `req ./x.losn`：宿主 `req(path)` 取源码，执行后返回模块值；同一路径只执行一次，循环依赖报错。
+
+名字解析（编译期，带跨度报错）：词法绑定 → 模块名 → 内建 →（带 `u` 的作用域里）`u.key` → 宿主表。大写开头的名字不走 `u` 规则。真值：`0` 为真；`NO` 就是 `undefined`；空串 / 空数组 / 空 Map·Set / `NaN` / `false` / `null` 为假。
+
+## 5.2 实现
+
+| 层 | 做法 |
+| --- | --- |
+| 语法 | `losn.js` 里手写递归下降（两种位置、`- v e` 连写、`{}` 三种读法、`[-x]>`、`.{ }`/`?.{ }`、`..`、`$()` 中缀与 `2x`、`is`/`Or` 链、行尾 `.` 续行、`def` 三种、`req`、`(tweak …)`）。产出与 `lisp.js` 相同形状的标签式 AST（`T`/`leaf`），CST 只用于上色 / 连线 / 报错跨度。 |
+| 转译 | 每个 def / lambda / `.{ }` → 一个 `function*` 模板。常量读 `K[i]`，调用点写 `R.s = i` 再 `yield* R.c(f, args, i)`；`o.(k a)` 走 `R.mc`，`o.[i]` 走 `R.at`，`{->o {k e}}` 走 `R.upd`。`$( )` 直接生成 JS 算术（`==`/`!=` 用 `R.eq`）。 |
+| 常量池 | 数字 / 颜色 / 字符串（不含 `${}`）/ 路径是格子；`(tweak …)` 的部件就是这些格子 + 声明下标。`mod.anchors()` / `mod.onedit(anchor, text)` / `mod.apply(next)` 支持改字面量不重解析、不丢运行状态。 |
+| 缓存 | 模板按**结构签名**缓存（忽略跨度与字面量值，保留种类）；每个模板有自己的一份格子 / 调用点 / 函数元数据表，所以不同位置、不同模块里结构相同的函数可以共用编译结果，而改数字 / 颜色 / 字符串内容不会重编。`LOSN.stats` 里能看到 `compiles` / `hits`。 |
+| 调试事件 | 函数返回处 `yield { ph:'ret', f, args, v, frame }`（只在有断点 / 观察时产出）；`frame` 是参数与局部的 thunk，暂停时可以按名字即时求值、`(OK v)` 替换返回值；调用宿主 JS 之后触发 `hooks.ext`（取源 / 帧缓冲共用）。 |
+| 快照 | `R.ser`（环 / 预算 / 宿主对象，和 `fbuf.js` 同形状）与 `mod.snap()`（只深拷贝 `{->}` 目标）；帧缓冲时间轴用它。写入事件带 `site`，取源反查用得到。 |
+
+`p5/app.js` 直接吃这套 API：`LOSN.parse` → `LOSN.compile`（宿主名字表）→ `LOSN.steps` / `LOSN.exec` / `LOSN.callback`；`P.useMod` 统一了示例模块加载；`p5.html` 的 boot 先 `fetch('losn.js')` 再按顺序插脚本。
+
+## 5.3 测试与运行
+
+```bash
+node tools/smoke.js        # 旧 Lisp / 元语言，仍然全绿
+node tools/smoke-losn.js   # LOSN：51 项检查（语法 8、运行时 25、10 个语言 demo、工具链 8；另含 30 个 p5 示例的源码解析/编译）
+V=1 node tools/smoke-losn.js   # 打印每条检查名
+node tools/bench-losn.js   # 同一程序的 lisp.js / LOSN 粗对比（fib 22：约 203 ms vs 9 ms，×21.7；Node 26 / 本机）
+
+python3 -m http.server 8765     # 然后打开 http://127.0.0.1:8765/p5.html
+# 30 个 p5 示例的无头验收（每个示例手动推 15 帧，收集解析 / 编译 / 运行时错误）
+chromium --headless=new --no-sandbox --virtual-time-budget=240000 --dump-dom \
+  'http://127.0.0.1:8765/tools/p5-run.html?frames=15'
+
+# 用真实 p5.html 逐个打开 30 个示例，检查 Console 面板（#out）里有没有错误 / 警告
+node tools/p5-console.js
+```
+
+- `demos/p5/`（示例下拉按下面分组；`index.json` 里每项带 `cat`）：
+  - **基础：形状 · 颜色** — 01 形状与颜色、04 正弦波、13 渐变条、27 颜色混合
+  - **鼠标 · 键盘交互** — 02 跟随鼠标、05 点击粒子、12 球池、18 打字、23 彩纸、25 弹簧跟随、28 回声拖尾、30 波点网格
+  - **物理模拟** — 03 弹球（see/tick）、19 引力井、26 轨道
+  - **网格与图案** — 08 色块网格、20 旋转多边形、21 等离子、22 波浪网格、24 曼陀罗
+  - **生成艺术** — 09 螺旋、10 利萨如、11 星空、14 噪声流场、16 贝塞尔绸带、17 脉冲环
+  - **递归与分形** — 07 分形树、29 递归圆
+  - **时间与异步** — 06 异步 await、15 时钟
+  每个示例都在 `tools/p5-run.html` 里跑 15 帧 + 画布覆盖率检查，并在 `p5.html#序号` 下检查 Console 无错误/警告。
+- `demos/lang/`：绑定与真值、lambda/闭包/递归、高阶内建、对象与 `{->}`、方法与管道、模板/可选参数、`def Pair`、`req`、`is` 链与真值边界、工具链（更新事件 / 快照 / 缓存）。
+
+已知取舍（和 `goal-losn.md` 的差异）：
+
+- 数组上有便利方法：`xs.(each).{ … }` / `.(map)` / `.(filter)` / `.(reduce)` 直接调用内建（`.(k)` 仍然不回退到作用域函数）。所以 `demo.losn` 第 153 行保持原样。
+- `(m.name)` 是“零实参调用”（和 `(f)` 一致）；读键请写 `m.name`。
+- `req` 的宿主解析：p5 页与无头测试都从当前页面目录读；没有 `host.req` 时报错并带跨度。
+- 闭包序列化按模板 + 捕获值（`$:{fn,name,params,env:null}`），不还原闭包；时间轴只还原 `{->}` 目标。

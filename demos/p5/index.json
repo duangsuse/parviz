@@ -1,0 +1,38 @@
+[
+  { "name": "01 形状与颜色", "file": "demos/p5/01-shapes.losn", "cat": "基础：形状 · 颜色" },
+  { "name": "04 正弦波", "file": "demos/p5/04-sine-wave.losn", "cat": "基础：形状 · 颜色" },
+  { "name": "13 渐变条", "file": "demos/p5/13-gradient-bars.losn", "cat": "基础：形状 · 颜色" },
+  { "name": "27 颜色混合", "file": "demos/p5/27-color-mix.losn", "cat": "基础：形状 · 颜色" },
+
+  { "name": "02 跟随鼠标", "file": "demos/p5/02-mouse-trail.losn", "cat": "鼠标 · 键盘交互" },
+  { "name": "05 点击粒子", "file": "demos/p5/05-particles.losn", "cat": "鼠标 · 键盘交互" },
+  { "name": "12 球池", "file": "demos/p5/12-ball-pit.losn", "cat": "鼠标 · 键盘交互" },
+  { "name": "18 打字", "file": "demos/p5/18-typing.losn", "cat": "鼠标 · 键盘交互" },
+  { "name": "23 彩纸", "file": "demos/p5/23-confetti.losn", "cat": "鼠标 · 键盘交互" },
+  { "name": "25 弹簧跟随", "file": "demos/p5/25-spring-follow.losn", "cat": "鼠标 · 键盘交互" },
+  { "name": "28 回声拖尾", "file": "demos/p5/28-echo-trail.losn", "cat": "鼠标 · 键盘交互" },
+  { "name": "30 波点网格", "file": "demos/p5/30-wave-grid.losn", "cat": "鼠标 · 键盘交互" },
+
+  { "name": "03 弹球", "file": "demos/p5/03-bouncing-ball.losn", "cat": "物理模拟" },
+  { "name": "19 引力井", "file": "demos/p5/19-gravity-wells.losn", "cat": "物理模拟" },
+  { "name": "26 轨道", "file": "demos/p5/26-orbit.losn", "cat": "物理模拟" },
+
+  { "name": "08 色块网格", "file": "demos/p5/08-color-grid.losn", "cat": "网格与图案" },
+  { "name": "20 旋转多边形", "file": "demos/p5/20-polygons.losn", "cat": "网格与图案" },
+  { "name": "21 等离子", "file": "demos/p5/21-plasma.losn", "cat": "网格与图案" },
+  { "name": "22 波浪网格", "file": "demos/p5/22-wave-grid.losn", "cat": "网格与图案" },
+  { "name": "24 曼陀罗", "file": "demos/p5/24-mandala.losn", "cat": "网格与图案" },
+
+  { "name": "09 螺旋", "file": "demos/p5/09-spiral.losn", "cat": "生成艺术" },
+  { "name": "10 利萨如", "file": "demos/p5/10-lissajous.losn", "cat": "生成艺术" },
+  { "name": "11 星空", "file": "demos/p5/11-starfield.losn", "cat": "生成艺术" },
+  { "name": "14 噪声流场", "file": "demos/p5/14-noise-flow.losn", "cat": "生成艺术" },
+  { "name": "16 贝塞尔绸带", "file": "demos/p5/16-bezier-ribbon.losn", "cat": "生成艺术" },
+  { "name": "17 脉冲环", "file": "demos/p5/17-pulse-rings.losn", "cat": "生成艺术" },
+
+  { "name": "07 分形树", "file": "demos/p5/07-fractal-tree.losn", "cat": "递归与分形" },
+  { "name": "29 递归圆", "file": "demos/p5/29-recursive-circles.losn", "cat": "递归与分形" },
+
+  { "name": "06 异步 await", "file": "demos/p5/06-async-wait.losn", "cat": "时间与异步" },
+  { "name": "15 时钟", "file": "demos/p5/15-clock.losn", "cat": "时间与异步" }
+]

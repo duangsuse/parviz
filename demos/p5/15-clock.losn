@@ -1,0 +1,33 @@
+# 15 时钟：sin / cos / line / millis
+createCanvas 480 480
+[noStroke]
+tick.{
+  background 18 18 28
+  scope [-] {
+    translate $(width / 2) $(height / 2)
+    - s $((millis) / 1000)
+    [range 12].(each).{
+      - a $(it * 0.5236 - 1.5708)
+      fill 120 140 180
+      circle $(200 * (cos a)) $(200 * (sin a)) 8
+    }
+    stroke 200
+    strokeWeight 2
+    [range 60].(each).{
+      - a $(it * 0.1047 - 1.5708)
+      line $(180 * (cos a)) $(180 * (sin a)) $(190 * (cos a)) $(190 * (sin a))
+    }
+    [noStroke]
+    - ha $(s / 3600 * 6.283 - 1.5708)
+    - ma $(s / 60 * 6.283 - 1.5708)
+    - sa $(s * 6.283 - 1.5708)
+    stroke 255
+    strokeWeight 4
+    line 0 0 $(120 * (cos ha)) $(120 * (sin ha))
+    strokeWeight 3
+    line 0 0 $(160 * (cos ma)) $(160 * (sin ma))
+    stroke 240 120 140
+    strokeWeight 2
+    line 0 0 $(180 * (cos sa)) $(180 * (sin sa))
+  }
+}

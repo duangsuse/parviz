@@ -1,0 +1,16 @@
+# 17 脉冲环：环形数组 + 年龄
+createCanvas 480 320
+[noStroke]
+- rings (map (range 12) [-i]> {r $(i * 26) a 255})
+tick.{
+  background 14 14 24 40
+  (each rings).{
+    - q it
+    {->q {r $(it + 1.6)  a $(it - 2.4)}}
+    $(q.a < 0)?.{ {->q {r 0  a 255}} }
+    [noStroke]
+    stroke 120 220 255 q.a
+    strokeWeight 2
+    circle 240 160 q.r
+  }
+}

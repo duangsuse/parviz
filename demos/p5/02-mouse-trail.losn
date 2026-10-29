@@ -1,0 +1,8 @@
+# 02 跟随鼠标：帧内清屏留拖尾
+createCanvas 480 320
+[noStroke]
+tick.{
+  background 24 24 37 30
+  fill (remap mouseX 0 width 80 255) 140 (remap mouseY 0 height 255 80)
+  circle mouseX mouseY 36
+}

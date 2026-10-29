@@ -1,0 +1,18 @@
+# 18 打字：keyPressed 事件 + 字符串方法 .(slice)
+createCanvas 480 320
+[noStroke]
+- st {txt ""}
+on "keyPressed".{
+  $(key == "Backspace")?.{ {->st {txt (st.txt.(slice 0 -1))}} }
+  $(key != "Backspace")?.{ {->st {txt $(st.txt + key)}} }
+}
+tick.{
+  background 22 22 32
+  fill 240
+  textSize 28
+  textAlign LEFT CENTER
+  text st.txt 24 160
+  textSize 12
+  fill 120
+  text "输入任意字符；Backspace 删除" 24 40
+}

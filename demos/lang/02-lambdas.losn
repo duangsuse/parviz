@@ -1,0 +1,11 @@
+# 02 lambda / 闭包 / 递归
+def fact(n) $(n <= 1)? 1 Or $(n * (fact $(n - 1)))
+def fib(n):
+  is $(n < 2)? n
+  Or $((fib $(n - 1)) + (fib $(n - 2)))
+...
+- make [-a]> [-b]> $(a * 10 + b)
+- add3 (make 3)
+w@ (fact 6) (fib 10) (add3 4) ((make 1) 2)
+def compose(f g) [-x]> (f (g x))
+w@ ((compose [-x]> $(x + 1) [-x]> $(x * 2)) 5)

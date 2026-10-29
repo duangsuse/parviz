@@ -1,0 +1,16 @@
+# 09 螺旋：scope + rotate
+createCanvas 480 480
+[noStroke]
+- st {a 0}
+tick [-] {
+  background 16 16 24
+  {->st {a $(it + 0.01)}}
+  [range 90].(each).{
+    scope [-] {
+      translate $(width / 2) $(height / 2)
+      rotate $(st.a + it * 0.07)
+      fill $(120 + 2it) 170 230
+      circle $(it * 2.2) 0 6
+    }
+  }
+}

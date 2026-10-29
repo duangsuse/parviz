@@ -1,0 +1,12 @@
+# 10 更新事件 / 快照 / 序列化（工具链在 tools/smoke-losn.js 里断言）
+- st {x 0 y 0 n 0}
+def bump():
+  {->st {x $(it + 1)  y $(it + 2)}}
+  {->st {n $(it + 1)}}
+...
+(bump)
+(bump)
+(bump)
+w@ st
+def twice(f) [-x]> (f (f x))
+w@ ((twice [-x]> $(x + 1)) 0)

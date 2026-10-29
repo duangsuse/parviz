@@ -1,0 +1,21 @@
+# 29 递归圆：def 递归 + scope
+createCanvas 480 480
+[noStroke]
+def rings(x y r n):
+  $(n <= 0)? NO Or (do-rings x y r n)
+...
+def do-rings(x y r n):
+  fill $(120 + 10 * n) 170 240 120
+  circle x y $(r * 2)
+  scope [-] {
+    rotate $(n * 0.4 + frameCount * 0.01)
+    (rings $(x + r * 0.7) y $(r * 0.62) $(n - 1))
+  }
+...
+tick.{
+  background 12 12 20
+  scope [-] {
+    translate $(width / 2) $(height / 2)
+    (rings 60 0 120 7)
+  }
+}

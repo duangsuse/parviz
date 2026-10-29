@@ -1,0 +1,15 @@
+# 28 回声拖尾：位置数组 + 连线
+createCanvas 480 320
+[noStroke]
+- st {n 0 tr []}
+tick.{
+  background 12 12 20 40
+  {->st {n $(it + 0.06)  tr (concat st.tr [{x mouseX y mouseY}])}}
+  $((len st.tr) > 90)?.{ {->st {tr (map (range 90) [-i]> (at st.tr $(i + (len st.tr) - 90)))}} }
+  [noStroke]
+  (each st.tr).{
+    - p it
+    fill 150 $(180 + 60 * (sin st.n)) 255 90
+    circle p.x p.y 4
+  }
+}

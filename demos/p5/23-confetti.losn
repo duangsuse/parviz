@@ -1,0 +1,23 @@
+# 23 彩纸：点击生成，each 更新重力与寿命
+createCanvas 480 320
+[noStroke]
+- ps []
+def burst(x y):
+  - more (map (range 18) [-i]> {x x y y vx (random -5 5) vy (random -7 -2) r (random 2 6) a 255 c (random 120 255)})
+  {ps (concat ps more)}
+...
+on "mousePressed".{ (burst mouseX mouseY) }
+see.{
+  (each ps).{
+    - p it
+    {->p {x $(it + p.vx)  y $(it + p.vy)  vy $(it + 0.18)  a $(it - 3)}}
+  }
+  {ps (filter ps [-p]> $(p.a > 0))}
+}
+tick.{
+  background 18 18 28
+  (each ps).{
+    fill it.c $(120 + it.c / 3) 240 it.a
+    circle it.x it.y $(it.r * 2)
+  }
+}

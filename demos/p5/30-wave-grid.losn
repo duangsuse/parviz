@@ -1,0 +1,19 @@
+# 30 波点网格：点击处产生衰减波纹（无数组状态：只记住一次点击）
+createCanvas 480 320
+[noStroke]
+- st {x 240 y 160 t 0}
+on "mousePressed".{ {->st {x mouseX y mouseY t (millis)}} }
+tick.{
+  background 12 12 20
+  - age $(((millis) - st.t) / 1000)
+  [range 24].(each).{
+    - i it
+    [range 16].(each).{
+      - j it
+      - d (dist $(i * 20) $(j * 20) st.x st.y)
+      - v (max 0 $(1 - (abs $(d * 0.01 - age * 1.4))))
+      fill $(120 + 120 * v) $(140 + 80 * v) 240
+      circle $(i * 20) $(j * 20) $(4 + 22 * v)
+    }
+  }
+}

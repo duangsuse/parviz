@@ -1,0 +1,17 @@
+# 05 点击生成粒子：动态注册 tick / off
+createCanvas 480 300
+[noStroke]
+tick [-] { background 18 18 28 }
+
+def spawn(x y):
+  - s {x x y y vx (random -2 2) vy (random -4 -1) a 255}
+  - h (tick [-] {
+    {->s {x $(it + s.vx)  y $(it + s.vy)  vy $(it + 0.08)  a $(it - 4)}}
+    fill 243 139 168 s.a
+    circle s.x s.y 12
+    $(s.a < 0)? (off h) Or NO
+  })
+...
+
+[on "mousePressed"].{ [range 14].(each).{ (spawn mouseX mouseY) } }
+"点一下画布"..(w@)

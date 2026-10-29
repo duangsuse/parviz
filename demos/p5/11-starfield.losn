@@ -1,0 +1,17 @@
+# 11 星空：数组里的对象；条件副作用用 ?.{ }（分支里放不了 {->}）
+createCanvas 480 320
+[noStroke]
+- stars (map (range 120) [-i]> {x (imp.random width) y (random height) s (random 1 3) v (random 0.4 2.6)})
+def wrap(s):
+  $(s.y > height)?.{ {->s {y 0  x (imp.random width)}} }
+...
+tick.{
+  background 10 10 18
+  (each stars).{
+    - b it
+    {->b {y $(it + b.v)}}
+    (wrap b)
+    fill 230 235 255 $(120 + 40 * b.s)
+    circle b.x b.y b.s
+  }
+}

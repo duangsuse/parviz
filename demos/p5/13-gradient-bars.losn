@@ -1,0 +1,10 @@
+# 13 渐变条：remap 与透明度
+createCanvas 480 320
+[noStroke]
+tick.{
+  background 14 14 22
+  [range 24].(each).{
+    fill (remap it 0 24 80 240) 120 (remap it 0 24 240 90)
+    rect $(it * 20) $(100 + 40 * (sin $(frameCount * 0.02 + it * 0.3))) 18 $(120 + 60 * (sin $(frameCount * 0.01 + it)))
+  }
+}

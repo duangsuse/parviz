@@ -1,0 +1,17 @@
+# 21 等离子：嵌套 each 与 sin 合成
+createCanvas 480 320
+[noStroke]
+- st {t 0}
+tick.{
+  background 10 10 16
+  {->st {t $(it + 0.04)}}
+  [range 16].(each).{
+    - x it
+    [range 12].(each).{
+      - y it
+      - v $((sin $(x * 0.7 + st.t)) + (sin $(y * 0.9 - st.t * 0.7)) + (sin $((x + y) * 0.4 + st.t * 1.3)))
+      fill $(140 + 80 * v) $(90 + 60 * v) $(200 + 40 * v)
+      rect $(x * 30) $(y * 27) 28 25 4
+    }
+  }
+}

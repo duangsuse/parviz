@@ -1,0 +1,12 @@
+# 07 def 类型 / 方法 / def OK 取消
+# 大写名 = 类型定义：返回同键名对象（- A 用变量名当键）；之后的小写 def 自动成为方法（首参 u）
+def Pair(A B) {- A - ["B"] B}
+def get() (OK (list u.A u.B))
+def swap() (OK (Pair u.B u.A))
+def OK
+- p (Pair "x" 1)
+w@ p.A p.B (p.get) (p.swap).B
+def plain(x) $(x + 1)
+w@ (plain 2)
+- q (Pair 7 8)
+w@ (q.get) (q.swap).A

@@ -1,0 +1,13 @@
+# 10 利萨如曲线：用鼠标控制两个频率
+createCanvas 480 320
+[noStroke]
+- st {fx 3 fy 2}
+tick.{
+  background 22 22 32
+  {->st {fx (remap mouseX 0 width 1 8)  fy (remap mouseY 0 height 1 8)}}
+  [range 160].(each).{
+    - t $(it * 0.05 + frameCount * 0.01)
+    fill 150 $(100 + it) 240 120
+    circle $(240 + 130 * (sin $(st.fx * t))) $(160 + 90 * (sin $(st.fy * t))) 10
+  }
+}

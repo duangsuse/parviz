@@ -1,0 +1,16 @@
+# 27 颜色混合：color / lerpColor
+createCanvas 480 320
+[noStroke]
+tick.{
+  background 14 14 22
+  - t (remap mouseX 0 width 0 1)
+  - c (lerpColor (color 243 139 168) (color 137 180 250) t)
+  [range 12].(each).{
+    - u $(it / 11)
+    - cc (lerpColor (color 137 180 250) (color 166 227 161) $(u * t + (remap mouseY 0 height 0 0.5)))
+    fill cc
+    rect $(it * 40) $(80 + 60 * (sin $(frameCount * 0.02 + it))) 36 120 10
+  }
+  fill c
+  circle mouseX 40 28
+}

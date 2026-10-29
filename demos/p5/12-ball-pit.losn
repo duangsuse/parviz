@@ -1,0 +1,27 @@
+# 12 球池：点击加球，each 里先 - b it 再更新
+createCanvas 480 320
+[noStroke]
+- balls []
+def add(x y):
+  {balls (concat balls [{x x y y vx (random -3 3) vy (random -3 3) r (random 8 18) c (random 120 255)}])}
+...
+def bounce(x r w vx):
+  is $(x < r)? (abs vx)
+  Or $(x > w - r)? (neg (abs vx))
+  Or vx
+...
+on "mousePressed".{ (add mouseX mouseY) }
+see.{
+  (each balls).{
+    - b it
+    {->b {x $(it + b.vx)  y $(it + b.vy)}}
+    {->b {vx (bounce b.x b.r width b.vx)  vy (bounce b.y b.r height b.vy)}}
+  }
+}
+tick.{
+  background 16 16 26
+  (each balls).{
+    fill 200 it.c 230
+    circle it.x it.y $(it.r * 2)
+  }
+}

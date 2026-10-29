@@ -1,0 +1,20 @@
+# 20 旋转多边形：vertex 与 scope
+createCanvas 480 320
+[noStroke]
+tick.{
+  background 16 16 26
+  [range 18].(each).{
+    scope [-] {
+      translate $(width / 2) $(height / 2)
+      rotate $(it * 0.35 + frameCount * 0.01)
+      - n $(3 + it % 7)
+      fill $(120 + 6 * it) 140 240 120
+      beginShape
+      [range n].(each).{
+        - a $(it * 6.283 / n)
+        vertex $(70 * (cos a)) $(70 * (sin a))
+      }
+      endShape 1
+    }
+  }
+}

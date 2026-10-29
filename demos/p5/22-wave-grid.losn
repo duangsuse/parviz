@@ -1,0 +1,16 @@
+# 22 波浪网格：点阵随正弦上下
+createCanvas 480 320
+[noStroke]
+tick.{
+  background 14 14 22
+  [range 25].(each).{
+    - i it
+    [range 17].(each).{
+      - j it
+      - d (dist $(i * 20) $(j * 20) mouseX mouseY)
+      - hh (sin $(d * 0.05 - frameCount * 0.06))
+      fill $(100 + 100 * hh) $(150 + 60 * hh) 240
+      circle $(i * 20) $(j * 18 + hh * 14) $(3 + 2 * hh)
+    }
+  }
+}

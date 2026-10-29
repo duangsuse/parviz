@@ -1,0 +1,25 @@
+# 19 引力井：粒子被鼠标吸引
+createCanvas 480 320
+[noStroke]
+- ps (map (range 160) [-i]> {x (random width) y (random height) vx 0 vy 0})
+see.{
+  (each ps).{
+    - p it
+    - dx $(mouseX - p.x)
+    - dy $(mouseY - p.y)
+    - d2 (max 400 $(dx * dx + dy * dy))
+    - f $(1200 / d2)
+    {->p {vx $(it + dx * f)  vy $(it + dy * f)}}
+    {->p {vx $(it * 0.995)  vy $(it * 0.995)}}
+    {->p {x $(it + p.vx)  y $(it + p.vy)}}
+  }
+}
+tick.{
+  background 12 12 20 50
+  (each ps).{
+    fill 160 220 255 150
+    circle it.x it.y 2
+  }
+  fill 255
+  circle mouseX mouseY 8
+}

@@ -1,0 +1,18 @@
+# 24 曼陀罗：对称旋转 + scope
+createCanvas 480 480
+[noStroke]
+tick.{
+  background 12 12 20
+  [range 12].(each).{
+    scope [-] {
+      translate $(width / 2) $(height / 2)
+      rotate $(it * 0.5236 + frameCount * 0.005)
+      fill $(140 + 9 * it) 160 240 120
+      ellipse 90 0 $(60 + 20 * (sin $(frameCount * 0.03 + it))) 24
+      fill 240 180 200 140
+      circle 170 0 18
+    }
+  }
+  fill 255 255 255 220
+  circle $(width / 2) $(height / 2) 14
+}

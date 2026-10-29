@@ -1,0 +1,22 @@
+# 14 噪声流场：粒子沿 noise 场移动；边界回绕
+createCanvas 480 320
+[noStroke]
+- ps (map (range 260) [-i]> {x (random width) y (random height) a (random 120 235)})
+def wrap(p):
+  $(p.x > width)?.{ {->p {x 0}} }
+  $(p.x < 0)?.{ {->p {x width}} }
+  $(p.y > height)?.{ {->p {y 0}} }
+  $(p.y < 0)?.{ {->p {y height}} }
+...
+tick.{
+  background 12 12 20 22
+  (each ps).{
+    - p it
+    - nx $(p.x * 0.004) - ny $(p.y * 0.004)
+    - ang $((noise nx ny $(frameCount * 0.004)) * 6.283)
+    {->p {x $(it + 2 * (cos ang))  y $(it + 2 * (sin ang))}}
+    (wrap p)
+    fill 120 220 255 p.a
+    circle p.x p.y 3
+  }
+}

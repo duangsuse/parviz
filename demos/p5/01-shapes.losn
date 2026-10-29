@@ -1,0 +1,20 @@
+# 01 形状与颜色：toplevel = setup
+(tweak circle (vec2 0 1) (num 2))
+(tweak rect (vec2 0 1) (vec2 2 3))
+createCanvas 480 320
+background 30 30 46
+[noStroke]
+fill #f38ba8
+circle 120 120 90
+fill 166 227 161 210
+rect 220 70 140 100 16
+fill 255
+textSize 18
+textAlign CENTER CENTER
+text "LOSN × p5" 240 260
+- t 0
+tick.{
+  {t $(it + 1)}
+  fill 97 175 239 60
+  circle $(240 + 120 * (cos $(0.02 * t))) $(160 + 80 * (sin $(0.03 * t))) 24
+}

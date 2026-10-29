@@ -1,0 +1,10 @@
+# 04 正弦波：each + range + 多项式系数
+createCanvas 480 240
+[noStroke]
+tick.{
+  background 20 20 30
+  [range 48].(each).{
+    fill $(120 + 3it) 150 $(255 - 3it)
+    circle $(12 + 9.5it) $(120 + 80 * (sin $(0.3it + 0.06 * frameCount))) 14
+  }
+}

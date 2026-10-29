@@ -1,0 +1,13 @@
+# 08 色块网格：嵌套 each，内层 it 与捕获的 x
+createCanvas 480 320
+[noStroke]
+tick.{
+  background 18 18 28
+  [range 12].(each).{
+    - x $(it * 40)
+    [range 8].(each).{
+      fill $(40 + 16 * x) $(80 + 20 * it) 200
+      rect $(x + 6) $(it * 40 + 6) 28 28 6
+    }
+  }
+}

@@ -1,0 +1,17 @@
+# 26 行星轨道：数组状态 + sin/cos
+createCanvas 480 480
+[noStroke]
+- planets [{r 70 s 0.9 z 10 c #f38ba8} {r 120 s 0.6 z 14 c #a6e3a1} {r 180 s 0.4 z 18 c #89b4fa}]
+- st {t 0}
+tick.{
+  background 10 10 18
+  {->st {t $(it + 0.02)}}
+  fill 249 226 175
+  circle $(width / 2) $(height / 2) 26
+  (each planets).{
+    - p it
+    - a $(st.t * p.s)
+    fill p.c
+    circle $(width / 2 + p.r * (cos a)) $(height / 2 + p.r * (sin a)) p.z
+  }
+}

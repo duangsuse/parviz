@@ -1,0 +1,13 @@
+# 01 绑定 / 重赋值 / 真值
+# - 是不可变绑定，{名字 值} 是重赋值；is x 返回布尔（0 为真，空串 / 空数组 / false 为假）
+- x 10
+{x $(x + 1)}
+w@ x
+- zero 0
+- empty ""
+- blank []
+- obj {}
+w@ (is zero) (is empty) (is blank) (is obj) (is false) (is "hi")
+- pair {a 1 b 2}
+{x $(x * 2)}
+w@ x pair

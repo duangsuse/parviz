@@ -1,0 +1,15 @@
+# 06 模板字符串 / tag 模板 / 可选参数
+- who "world"
+w@ `hi ${who}!`
+def tag(strs ..):
+  - vs (xargs)
+  OK (list strs vs)
+...
+w@ tag`a${1}b${2}c`
+def opt(x ..):
+  [xargs {a_ 1 b_ $(a_ * 10)}]
+  OK (list x a_ b_ (xargs))
+...
+w@ (opt 0) (opt 0 5) (opt 0 NO 7) (opt 0 5 6)
+w@ `line1
+line2`

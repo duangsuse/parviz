@@ -1,0 +1,239 @@
+# demo.losn - 存量 Lisp 示例(lisp.js 的 2 个 + p5/exec.js 的 7 个)按新语法改写
+# 每个 "#== ==" 小节是一个独立程序。四则运算(TDOP/Chain)是另一套元语言文法,不受影响,没收进来。
+#
+# 转换规则(我按你的说明推出来的,有疑问的见每节注释里的 [?]):
+#   [- k v] / (- k v)          -> - k v                      单赋值,语句位置,无括号
+#   [-> t e] 局部赋值           -> {t $(e)}
+#   o..[-> {k v}] / o..[-> "k" v] -> {->o {k v}}              ->键块里 it = 该字段旧值
+#   (=> (x y) e)               -> [-x-y]> e                   后面还有实参时要包括号:([-x]> e) 0
+#   (=> () e)                  -> [-]> e
+#   tick.{ } see.{ } scope.{ } on "e".{ }  .{ } 的首参叫 it,不触发 u 规则,块里宿主名直接写;tick [-] { } 是等价的零参块
+#   ?.{ } 的参数叫 u:块里非大写、非 imp 的自由变量会变成 u.key / u.(fn);要用全局名写 imp.rect(imp = 全局表)
+#   (> a + b)                  -> $(a + b)                    只有 $ 里有中缀
+#   x..[f a] / [f x]..[g]      -> x..(f a)                    参数位置的 [] 总是列表,管道不再用 []
+#   ..[at 0]                   -> .[0]
+#   (- ...) 外的 (f a) 调用     不变;语句位置 [f] 零实参调用不变;def f(x): ... 不变
+
+
+#== Lisp (lisp.js 内置示例) ==
+# 语句位置的 [..] 是调用;x..(f a) 是管道
+
+- big [-xs-n]> xs?.{ $(u > n)? u Or NO }
+
+def fact(n) $(n <= 1)? 1 Or $(n * (fact $(n - 1)))
+- inc1 [-a]> (len a) + 1
+- user {name "parviz" langs ["js" "lisp"]}
+
+# ->键更新原对象并返回它;原来的 older 一起变
+{->user {"age" 40}}
+- older user
+
+# 可选参数:参数表末尾的 .. 收集多出来的实参。(xargs) 是收集到的数组;模板字符串可多行
+def greet(who ..):
+  [xargs {title_ "Dr." n_ 1}]
+  OK `${title_} ${who} ×${n_},另有 ${(len (xargs))} 个`
+...
+
+w@ "fact 5 =" (fact 5) "big:" [3 14 15 9 26]..(big 10) user.name older.age (inc1 [1 2 3])
+w@ (greet "ann") (greet "bo" "Prof." 2)
+
+# ?.{ } :数组逐项处理并丢掉 NO 返回，假值原样
+w@ [1 2 3]?.{ $(u * 2) } user.nope?.{ $(u + 1) } older.age?.{ $(u + 1) } (map [1 2 3]).{ $(it * it) }
+def poly(x y):
+  {t $(2x + 3y > 7)}
+  (OK (both t $(x != y)))
+...
+w@ (poly 2 3) (poly 0 1)
+OK [123]..(mapNotNO [-x]> $(x > 10)? x Or NO).[0]
+
+#== Lisp(作用域/错误) ==
+- k 10
+- add [-a-b] {
+  - s (+ a b)
+  OK s..(+ k)
+}
+def twice(f x) (f (f x))
+def opt(a ..): [xargs {b 1}] (OK a) ...   # 可选参数名必须以 _ 结尾
+- c 1
+{c 2}
+w@ (twice ([-y]> (add y 1)) 5) undefinedName
+OK {sum (add 1 2) xs [1 2 (3 ] ok "fine"}
+
+
+#== p5 1. Hello:toplevel 即 setup ==
+# toplevel 语句就是 setup,只跑一次;JS 函数直接当 Lisp 函数调:同一行里 f a b 并列即调用
+# p5 函数推断出悬停部件;自己写 (tweak …) 就以它为准
+(tweak circle (vec2 0 1) (num 2))
+createCanvas 400 300
+background 30 30 46
+[noStroke]                    # 没有实参的调用要写括号,否则只是名字
+
+fill #f38ba8
+circle 120 150 90
+fill 166 227 161 210
+rect 180 90 120 120 20
+fill 255
+textSize 20
+textAlign CENTER CENTER
+text "hello, p5 × lisp" 200 250
+
+# cond?.{ … } 是开关:点 ?.{ 在 cond 与 (isnt cond) 之间切换(关掉时整块变灰)
+"on"?.{ imp.rect 20 20 60 30 8 }
+# btn_ 开头、没有参数的 def 是按钮:点函数名(或 Tweak 面板里的 ▶ 执行)运行它
+def btn_dot():
+  fill (random 255) (random 255) (random 255)
+  circle (random width) (random height) 40
+...
+
+# console.* 也进下面的 Console;Lisp 函数可以当回调参数传给 JS
+console.
+  (log "canvas" width height)
+console.log "hi" 123 ([-]> 456)    # console.log … 是 JS 的方法调用,this 是 console
+
+# 模板字符串可多行;echo`…` 调 echo(字符串段数组, 值…),多出来的实参用 (xargs) 取;html … 往 Console 输出 HTML
+- World "p5"
+def echo(strs ..):
+  - vs (xargs)
+  html (reduce (range (len vs)) ([-acc-i]> `${acc}<b style="color:#f38ba8">${(at vs i)}</b>${(at strs (+ i 1))}`) (at strs 0))
+...
+echo`Hello ${World}, ${width}×${height}`
+
+
+#== p5 2. 跟随鼠标:tick ==
+createCanvas 400 300
+[noStroke]
+
+# 每个重画帧跑一次(see 才是固定 20 Hz 的物理帧);mouseX / width 这些 p5 变量每次引用都读最新值
+tick.{
+  background 24 24 37 40                         # 带透明度,留下拖尾
+  fill (remap mouseX 0 width 80 255) 140 (remap mouseY 0 height 255 80)
+  circle mouseX mouseY 36
+}
+
+
+#== p5 3. 弹球:see 物理帧 + tick 重画 ==
+createCanvas 400 300
+frameRate 60 20                  # 最多 60 fps 重画;see 的物理帧 20 Hz
+[noStroke]
+
+# 名字是不可变绑定,会变的状态放进对象,用 {->ball {…}} 原地改
+- gravity 1.2 - ball {x 200 y 60 vx 9 vy 0 r 18}
+
+# x 碰墙就反向
+def if-wall(x r w vx):
+  is $(x + r > w)? (neg (abs vx))
+  Or $(x < r)? (abs vx)
+  Or vx
+...
+def floor-hit():
+  {->ball {y $(height - ball.r)  vy $(it * -0.92)}}
+...
+
+# see:物理,固定 20 Hz,和重画帧率无关(所以每一步的位移是 tick 版的三倍)
+see.{
+  {->ball {vx (if-wall ball.x ball.r width it)  vy $(it + gravity)}}
+  {->ball {x $(it + ball.vx)  y $(it + ball.vy)}}
+  $(ball.y + ball.r > height)? (floor-hit) Or NO
+}
+
+# tick:每个重画帧画一次(物理 20 Hz、画面 60 fps,球一格一格地动)
+tick.{
+  background 17 17 27
+  fill 249 226 175
+  circle ball.x ball.y $(ball.r * 2)
+}
+
+
+#== p5 4. 正弦波:each + range ==
+createCanvas 480 240
+[noStroke]
+
+tick [-] {
+  background 20 20 30
+  [range 48].(each).{ # Range(A,B,dt=1) 是一个专门类的对象
+    fill $(120 + 3it) 150 $(255 - 3it)
+    circle $(12 + 9.5it) $(120 + 80 * (sin $(0.3it + 0.06 * imp.frameCount))) 14
+  }
+}
+
+
+#== p5 5. 点击生成粒子:动态注册 tick / on ==
+createCanvas 480 300
+[noStroke]
+tick [-] { background 18 18 28 }                 # 最先注册,每帧最先跑:清屏
+
+# 每个粒子是一个自己注册、自己 off 的 tick:tick [-] { … } 返回句柄
+def spawn(x y):
+  - s {x x y y vx (random -2 2) vy (random -4 -1) a 255}
+  - h (tick [-] {
+    {->s {x $(it + s.vx)  y $(it + s.vy)  vy $(it + 0.08)  a $(it - 4)}}
+    fill 243 139 168 s.a
+    circle s.x s.y 12
+    $(s.a < 0)? (off h) Or NO
+  })
+...
+
+[on "mousePressed"].{ [range 14].(each).{ spawn imp.mouseX imp.mouseY } }
+"点一下画布"..(w@)
+
+
+#== p5 6. 异步:自动 await Promise ==
+# 返回 Promise 的调用自动 await:toplevel / tick 里可以直接顺序等待
+createCanvas 420 200
+background 30 30 46
+[noStroke]
+console.log "start" (Promise.resolve 42)         # 打印 42,不是 Promise
+
+[each (range 5)].{
+  imp.fill $(50it) 150 220
+  imp.circle $(50 + 80it) 100 50
+  wait 1400                                       # wait 返回 Promise;setup 在这里等
+}
+console.log "setup 结束,draw 才开始"
+
+# tick 里 await:这个 tick 没跑完时后续帧跳过它 = 协程,一秒一次
+- st {n 0}
+tick.{
+  {->st {n $(it + 1)}}
+  fill 255 st.n
+  textSize 18
+  text (str "tick " st.n) 20 $(170 + st.n % 3 * 10)
+  wait 1000
+}
+
+# (fetch "https://...") 也是 Promise;(.json) 之类的方法写成 (r.json)
+
+
+#== p5 7. 分形树:def 递归 + 断点 ==
+# 双击函数名(如 branch / grow)设断点,每次返回都暂停,F9 继续
+createCanvas 480 360
+frameRate 30
+- st {a 0.5}
+
+def branch(len depth):
+  strokeWeight $(1 + 0.8depth)
+  line 0 0 0 (neg len)
+  translate 0 (neg len)
+  $(depth > 0)? (grow len depth) Or NO
+...
+
+def grow(len depth):
+  scope [-] {
+    rotate st.a
+    branch $(len * 0.72) $(depth - 1)
+  }
+  scope [-] {
+    rotate (neg st.a)
+    branch $(len * 0.72) $(depth - 1)
+  }
+...
+
+tick [-] {
+  background 24 24 37
+  {->st {a (remap mouseX 0 width 0.1 1)}}
+  stroke 166 227 161
+  scope [-] {
+    translate $(width / 2) height
+    branch 80 7
+  }
+}

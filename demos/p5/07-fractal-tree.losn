@@ -1,0 +1,32 @@
+# 07 分形树：def 递归 + 双击函数名断点
+createCanvas 480 360
+frameRate 30
+- st {a 0.5}
+
+def branch(len depth):
+  strokeWeight $(1 + 0.8depth)
+  line 0 0 0 (neg len)
+  translate 0 (neg len)
+  $(depth > 0)? (grow len depth) Or NO
+...
+
+def grow(len depth):
+  scope [-] {
+    rotate st.a
+    branch $(len * 0.72) $(depth - 1)
+  }
+  scope [-] {
+    rotate (neg st.a)
+    branch $(len * 0.72) $(depth - 1)
+  }
+...
+
+tick [-] {
+  background 24 24 37
+  {->st {a (remap mouseX 0 width 0.1 1)}}
+  stroke 166 227 161
+  scope [-] {
+    translate $(width / 2) height
+    branch 80 7
+  }
+}

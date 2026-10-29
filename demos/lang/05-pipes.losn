@@ -1,0 +1,11 @@
+# 05 方法 / 下标 / 管道
+- xs [10 20 30]
+w@ xs.[0] xs.[-1]
+- o {at_ [-i]> (at xs i)}
+w@ o.[1]
+- s "hello"
+w@ s.(slice 1 3) s.(toUpperCase)
+w@ (xs..(len)) (xs..(at 2))
+"abc"..(w@)
+- m (map (range 5)).{ $(it * 3) }
+w@ m (m.(map [-x]> $(x + 1)))

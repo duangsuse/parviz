@@ -1,0 +1,12 @@
+# 04 对象 / KV / {->} 更新（it = 该字段旧值）
+- user {name "ann" age 20 tags ["a" "b"]}
+{->user {age $(it + 1)}}
+{->user {name (str user.name "!")}}
+w@ user.name user.age (len user.tags)
+- p {x 1 y 2}
+{->p {y $(it * 10)}}
+{->p {}}
+w@ p
+- q {a 1}
+{->q {b $(q.a + 1)}}
+w@ q

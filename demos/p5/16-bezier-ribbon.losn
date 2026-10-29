@@ -1,0 +1,16 @@
+# 16 贝塞尔绸带
+createCanvas 480 320
+[noStroke]
+tick.{
+  background 16 16 26
+  - t $(frameCount * 0.02)
+  [range 40].(each).{
+    - u $(it / 40)
+    - y $(160 + 90 * (sin $(u * 6.283 + t)))
+    fill $(120 + 130 * u) $(180 - 60 * u) 240 90
+    circle $(u * 480) y $(14 + 10 * (sin $(u * 12 + t * 2)))
+  }
+  stroke 255 255 255 60
+  strokeWeight 2
+  bezier 0 160 $(160 + 60 * (cos t)) $(30 + 60 * (sin t)) $(320 - 60 * (cos t)) $(290 - 60 * (sin t)) 480 160
+}

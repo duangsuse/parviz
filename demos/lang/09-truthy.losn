@@ -1,0 +1,14 @@
+# 09 is / Or 多行 else-if 链 + 真值边界
+w@ (is 0) (is "") (is []) (is {}) (is false) (is "x")
+def wall(x):
+  is $(x < 0)? "left"
+  Or $(x > 100)? "right"
+  Or "mid"
+...
+w@ (wall -5) (wall 200) (wall 50)
+- t 0
+{t $(t + 1)}
+{t $(t + 1)}
+w@ t
+def pick(c a b) $(c)? a Or b
+w@ (pick 0 1 2) (pick "" 1 2) (pick (list 1) 1 2)
