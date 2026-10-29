@@ -217,7 +217,7 @@ Stmt   Exp (Same *) :lstmt
 Same   Exp :lsame
 Exp    ((Chain ("?" Recur "Or" Recur ?) :if) :setRecur)
 Chain  Atom (Dot *) :chain
-Dot    ((".." (List Brk <) :dpipe) (("?.{" ".{" <) (Recur *) "}" :par :cb) ("." (Mcall Str Dkey <)) Ttag <)
+Dot    ((".." (List Brk <) :dpipe) (("?.{" ".{" <) (Stmt *) "}" :par :cb) ("." (Mcall Str Dkey <)) Ttag <)
 Mcall  (("(" Dkey (Recur *) ")" :par) ("[" Dkey (Recur *) "]" :par) <) :mcall
 Atom   (Mono Num Str Lit Lam Let Set Defn Xargs Tpl Tweak List Brk Obj Name <)
 Lam    ((/\\((?=\\s*=>)/ "=>" Params (Recur *) ")" :par) (/\\[(?=\\s*=>)/ "=>" Params (Recur *) "]" :par) <) :fn
@@ -245,9 +245,12 @@ Pname  /${SYM}+/
 Tpl    (Tbeg (Hole *) "\`") :tpl
 Ttag   (Tbeg1 (Hole *) "\`") :ttag
 Tweak  (/\\((?=\\s*tweak\\b)/ "tweak" Tname (Spec *) ")" :par) :tweak
-Spec   ("(" Tkind (Num *) ")" :par) :spec
-Tname  /${SYM}+/ :lit
-Tkind  /vec2|color|num|size|angle/ :lit
+Spec   ("(" Tkind (Tidx *) ")" :par) :spec
+Tname  (Trec Tsym <)
+Trec   ("{" (Tsym *) "}" :par :tag("rec"))
+Tidx   (Num Tsym <)
+Tsym   /${SYM}+/ :lit
+Tkind  /vec2|color|num|size|angle|enum/ :lit
 Hole   "\${" Recur Tend
 Tbeg   /\\x60${TCH}/
 Tbeg1  /(?<=[^\\s,;])\\x60${TCH}/

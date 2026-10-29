@@ -51,12 +51,12 @@ const Pick = (() => {
     px.g = g; px.d = p.pixelDensity ? p.pixelDensity() : 1; px.x = x; px.y = y; px.by = null; px.under = null; px.saved = {}
     for (const k of DIRTY) { const o = g[k]; if (typeof o != 'function') continue; px.saved[k] = o; g[k] = function (...a) { const r = o.apply(this, a); after(); return r } }
     try { const { X, Y } = dev(); px.under = Array.from(g.getImageData(X, Y, 1, 1).data) } catch { px.under = null }
-    sink = []; hooks.ext = call; plant()
+    sink = []; px.prev = hooks.ext; hooks.ext = e => { call(e); px.prev?.(e) }; plant()   // 帧缓冲的记录钩子（fbuf.js）同时在场：串起来，结束时还原
     return true
   }
   // 返回 { by, calls }：by 是像素读回得到的归属（可能为 null），calls 是本帧记下的几何调用
   function end(hooks) {
-    const g = px.g, calls = sink || []; sink = null; hooks.ext = null
+    const g = px.g, calls = sink || []; sink = null; hooks.ext = px.prev || null; px.prev = null
     if (g) {
       for (const k in px.saved) g[k] = px.saved[k]
       try {   // 标记还在 = 之后没有调用盖住它：把像素还成真实内容

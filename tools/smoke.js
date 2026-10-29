@@ -59,6 +59,7 @@ const two = lisp('def s(p) p\n(- c {d s})\ns 1; c.d 2'); assert.deepStrictEqual(
 same('(- inc (=> (a) [len a]..[+ 1]))\n(w@ (inc [1 2 3]) (list 1 2)..(len) 5..(list 6))', ['4 2 [5 6]'])        // 管道；语句位置的基 [len a] 是调用，参数位置的 [..] 是数组
 same('(- o {f len k 7})\n(w@ o.[f [1 2 3]] o.(f "ab") o.k)', ['3 2 7'])                                         // o.[k a] 即 [o.k a]：k 是键，不是名字
 same('(- o {n 4})\n(w@ [1 2 3]?.{ (> u * 2) } o.n?.{ (> u + 1) } o.zz?.{ (> u + 1) } (map [1 2 3]).{ (> u * u) })', ['[2 4 6] 5 NO [1 4 9]'])   // ?.{ } 即 (As 值 (=> (u) …))；.{ } 追加回调
+same('(w@ (map [1 2 3]).{ w@ u; OK (> u * 2) })', ['1', '2', '3', '[2 4 6]'])   // .{ } 的块里是语句（同一行并列即调用）；纯 Lisp 里值要用 OK 返回
 same('(- w "x")\n(w@ `a ${w} ${w}b${(+ 1 2)}` `l1\nl2` `\\$ \\u0041 e\\n`)', ['a x xb3 l1\nl2 $ A e\n'])      // 模板字符串：插值（段内空白保留）/ 多行 / 转义
 same('def tg(s ..): (OK (list s (xargs))) ...\n(w@ tg`a${1}b${2}c` tg`z`)', ['[["a" "b" "c"] [1 2]] [["z"] []]'])   // tag`…` 即 (tag [段…] 值…)
 same('def f(x ..):\n  [xargs {a_ 1 b_ (+ a_ 10)}]\n  (OK (list x a_ b_ (xargs)))\n...\n(w@ (f 0) (f 0 5) (f 0 NO 7) (f 0 5 6 9))', ['[0 1 11 []] [0 5 15 [5]] [0 1 7 [NO 7]] [0 5 6 [5 6 9]]'])   // 可选参数：按序、NO/缺省取默认值
@@ -106,6 +107,15 @@ assert.strictEqual(g.stmt, 'Stmt', '@stmt 指令')
   assert.strictEqual(s.src.slice(d.a[b], d.b[b]), 'a')
 }
 console.log('smoke ok (;/#)')
+// 帧缓冲快照：闭包捕获的环境进快照（共享环境只拍一次、自引用不死循环），内建不算用户状态，不可克隆的宿主值只记类型名
+{ const F = require('../p5/fbuf.js'), top = new L.Env(null), loc = new L.Env(top), xs = [1, 2]
+  top.m.set('xs', xs); top.m.set('w@', Object.assign(() => 0, { bname: 'w@' })); top.m.set('d', new Map)
+  const f = { t: 'fn', params: ['a'], body: [], env: loc, name: 'f' }; loc.m.set('n', 3); loc.m.set('self', f); top.m.set('f', f)
+  const s = F.snapshot([top, loc]), t = s.envs[0].vars
+  assert.deepStrictEqual(s.roots, [0, 1]); assert.deepStrictEqual(t.xs, [1, 2]); assert.deepStrictEqual(t.d, { $: 'js', name: 'Map' })
+  assert.ok(!('w@' in t)); assert.deepStrictEqual(s.envs[1], { id: 1, parent: 0, vars: { n: 3, self: { $: 'fn', name: 'f', params: ['a'], env: 1 } } })
+  xs.push(3); assert.deepStrictEqual(t.xs, [1, 2])   // 快照是副本，之后的修改不影响
+  assert.ok(F.fmt(s).includes('<fn f E1>')); console.log('smoke ok (fbuf)') }
 // ---- 脱离调试器独立运行：JS 互操作 / 自动 await / 回调 / 断点暂停 / 取消 ----
 const gh = P.grammar(L.RULES), base = gh.builtins
 const jsHost = (extra = {}) => { const h = Object.assign(L.hostOf(globalThis), { last: true }, extra); gh.builtins = { has: n => base.has(n) || h.has(n) }; L.host = h; return h }
