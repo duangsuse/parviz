@@ -437,7 +437,7 @@ const funcs = {
 
 /* ---------- 元语言编译器 ----------
    行首（无缩进）开始一条，第一条规则就是起始规则：  Name body...  | Name(P,..) body... | @skip /re/|none | @color Name=B .. | @walk name
-   body 是隐式序列；( items ops ) 分组，ops: < 有序选择  + 连接(末项为分隔符)  * 重复  ? 可选  :setRecur 递归起点  :f 后处理  :par 配对
+   body 是隐式序列；( > items < ) 有序选择（首项必须是 >，结尾 <），其余分组 ops: + 连接(末项为分隔符)  * 重复  ? 可选  :setRecur 递归起点  :f 后处理  :par 配对
    A|B 内联选择；"lit" 字面量；小写词为关键字；(kw1 kw2 -) 关键字集合（- 表示可不消耗，登记补齐候选）；
    X (- "+" "-"; "*" "/" -) 算符表：修饰前一项 X，按 ; 分级（越往后越紧），左结合；
    Recur 引用最近的 :setRecur；/re/ 中 ${P} 插入参数。 */
@@ -466,7 +466,7 @@ function mtok(s) {
       try { v = JSON.parse(s.slice(a, i)) } catch { push('bad', f`字符串非法`, a); continue }
       push('lit', v, a); continue
     }
-    if ('()|,=-;'.includes(ch)) { i++; push(ch, ch, a); continue }
+    if ('()|,=-;>'.includes(ch)) { i++; push(ch, ch, a); continue }
     if ('<+*?'.includes(ch)) { i++; push('op', ch, a); continue }
     WORD.lastIndex = i; const m = WORD.exec(s)
     if (m) { i = WORD.lastIndex; push(m[1] == ':' ? 'fn' : m[1] == '@' ? 'dir' : 'word', m[2], a, { adj: s[i] == '(' }); continue }
@@ -481,6 +481,7 @@ function mparse(S) {
   const atom = () => {
     const x = S[k]; if (!x) throw new MErr(f`缺少一项`, S.at(-1))
     if (x.t == '(') { k++; if (S[k]?.t == '-') return optab(x); const g = items(')'); need(')'); return g }
+    if (x.t == '>') { k++; return { t: 'gt', x } }
     k++
     if (x.t == 're') return { t: 're', v: x.v, x }
     if (x.t == 'lit') return { t: 'lit', v: x.v, x }
@@ -540,17 +541,27 @@ function build(m, env, g) {
     case 'ref': return env[m.name] ? build(env[m.name], {}, g) : g.inst(m.name, m.args.map(x => x.t == 'ref' && env[x.name] ? env[x.name] : x), m.x)
     case 'optab': throw new MErr(f`算符表 (- …) 前面需要一个操作数`, m.x)
     case 'grp': {
-      if (m.items.length && !m.ops.length && m.items.every(x => x.t == 'kw' || x.t == 'empty') && m.items.some(x => x.t == 'kw'))
-        return kwset(m.items.filter(x => x.t == 'kw').map(x => x.v), m.items.some(x => x.t == 'empty'))
-      if (m.items.some(x => x.t == 'empty')) throw new MErr(f`"-" 只能用在关键字集合 (kw1 kw2 -) 中`, m.items.find(x => x.t == 'empty').x)
+      const gts = m.items.filter(x => x.t == 'gt')
+      if (gts.length > 1) throw new MErr(f`一个分组只能有一个 >`, gts[1].x)
+      if (gts.length && m.items[0].t != 'gt') throw new MErr(f`> 只能是有序选择的首项`, gts[0].x)
+      const hasPar = m.ops.some(o => o.t == 'fn' && o.v == 'par')
+      const st = m.ops.filter(o => o.t == 'op').at(-1)?.v
+      if (gts.length) {
+        if (hasPar) throw new MErr(f`有序选择不能与 :par 同组`, gts[0].x)
+        if (st != '<') throw new MErr(f`有序选择以 < 结尾`, gts[0].x)
+      }
+      else if (st == '<') throw new MErr(f`有序选择需要首项 >`, m.ops.find(o => o.t == 'op' && o.v == '<'))
+      const items = gts.length ? m.items.slice(1) : m.items
+      if (items.length && !m.ops.length && items.every(x => x.t == 'kw' || x.t == 'empty') && items.some(x => x.t == 'kw'))
+        return kwset(items.filter(x => x.t == 'kw').map(x => x.v), items.some(x => x.t == 'empty'))
+      if (items.some(x => x.t == 'empty')) throw new MErr(f`"-" 只能用在关键字集合 (kw1 kw2 -) 中`, items.find(x => x.t == 'empty').x)
       const its = []   // 算符表修饰紧挨在它前面的一项
-      for (const x of m.items) {
+      for (const x of items) {
         if (x.t != 'optab') { its.push(build(x, env, g)); continue }
         if (!its.length) throw new MErr(f`算符表 (- …) 前面需要一个操作数`, x.x)
         its.push(prec(its.pop(), x.levels.map(L => L.map(y => build(y, env, g)))))
       }
       if (!its.length) throw new MErr(f`空分组`, m.ops[0])
-      const st = m.ops.filter(o => o.t == 'op').at(-1)?.v
       let p
       if (m.ops.some(o => o.t == 'fn' && o.v == 'par')) {
         if (its.length < 2) throw new MErr(f`:par 需要开、闭两项`, m.ops[0])
@@ -636,7 +647,7 @@ function grammar(text, opt = {}) {
 /* ---------- 示例语法 ---------- */
 const CSV_RULES = `Table(D) (Row(D) /\\r?\\n/ +) :table
 Row(D)   (Field(D) D +)
-Field(D) (Quoted Num(D) Bare(D) <)
+Field(D) (> Quoted Num(D) Bare(D) <)
 Quoted   /"(?:[^"]|"")*"/ :unq
 Num(D)   /-?\\d+(?:\\.\\d+)?(?=[\${D}\\r\\n]|$)/ :num
 Bare(D)  /[^"\\r\\n\${D}]*/`
@@ -647,12 +658,25 @@ const examples = [
   { name: 'JSON', input: `{"name": "parviz", "tags": [1, 2.5e3, -0.5, true, null],
  "nested": {"a": [], "b": {"deep": [[1], [2, [3]]]}},
  "esc": "line\\n\\u4e2d"}`,
-    rules: `# JSON —— (… <) 有序选择(PEG)，(… :setRecur) 递归起点，Recur 引用最近的 :setRecur
+    rules: `# JSON —— (> … <) 有序选择(PEG)，(… :setRecur) 递归起点，Recur 引用最近的 :setRecur
 # (… +) 以末项为分隔符连接 0~N 个；(… :par) 配对提示与错误恢复；第一条规则是起始规则
 @color Num=B Str=Y kw=B
-Json  ((Val Lit null true false <) :setRecur)
-Val   (("[" (Recur "," +) "]" :par) ("{" (Str ":" Recur "," +) "}" :par :obj) <)
-Lit   (Num Str <)
+Json  ((> Val Lit null true false <) :setRecur)
+Val   (> ("[" (Recur "," +) "]" :par) ("{" (Str ":" Recur "," +) "}" :par :obj) <)
+Lit   (> Num Str <)
+Num   /-?(0|[1-9][0-9]*)(\\.\\d+)?([eE][+-]?\\d+)?/ :num
+Str   /"(\\\\(?:[nrtbf"\\\\\\/]|u[0-9a-fA-F]{4})|[^"\\\\])*"/ :str` },
+  { name: 'JSON（Arr/Obj）', input: `{"name": "parviz", "tags": [1, 2.5e3, -0.5, true, null],
+ "nested": {"a": [], "b": {"deep": [[1], [2, [3]]]}},
+ "esc": "line\\n\\u4e2d"}`,
+    rules: `# JSON —— (> … <) 有序选择(PEG)，(… :setRecur) 递归起点，Recur 引用最近的 :setRecur
+# (… +) 以末项为分隔符连接 0~N 个；(… :par) 配对提示与错误恢复；第一条规则是起始规则
+@color Num=B Str=Y kw=B
+Json  ((> Arr Obj Lit null true false <) :setRecur)
+Arr ("[" (Recur "," +) "]" :par)
+Obj ("{" (Str ":" Recur "," +) "}" :par :obj)
+
+Lit   (> Num Str <)
 Num   /-?(0|[1-9][0-9]*)(\\.\\d+)?([eE][+-]?\\d+)?/ :num
 Str   /"(\\\\(?:[nrtbf"\\\\\\/]|u[0-9a-fA-F]{4})|[^"\\\\])*"/ :str` },
   { name: 'JSON（含错误）', input: `[1, , 2, {"a" 1, "b": 2}, 3 4, [5, 6}, 7,
@@ -685,20 +709,20 @@ Name  /[A-Za-z_]\\w*/` },
 const META_HEAD = `@skip /(?:[ \\t]+|#[^\\n]*)+/
 @color Re=Y Lit=Y Kw=B Op=P Dir=P Head=G
 `
-const META_BODY = `Line    ((Dir Rule <) ?)
+const META_BODY = `Line    ((> Dir Rule <) ?)
 Dir     /@\\w+/ (Arg *)
-Arg     (Re Lit Pair Word <)
+Arg     (> Re Lit Pair Word <)
 Pair    /\\w+=\\w+/
 Word    /\\w+/
-Item    ((Group Re Lit "Recur" Kw Call Op <) :setRecur)
+Item    ((> Group Re Lit "Recur" Kw Call Op <) :setRecur)
 Group   ("(" (Recur *) ")" :par)
 Call    Name (Args ?)
 Args    (/(?<=\\w)\\(/ (Arg2 "," +) ")" :par)
-Arg2    (Lit Name <)
+Arg2    (> Lit Name <)
 Re      /\\/(?:\\\\.|\\[(?:\\\\.|[^\\]\\\\])*\\]|[^\\/\\\\\\n\\[])+\\//
 Lit     /"(?:\\\\.|[^"\\\\\\n])*"/
 Kw      /[a-z]\\w*/
-Op      /[<+*?|;-]|:\\w+/`
+Op      /[<>+*?|;-]|:\\w+/`
 const META_V1 = `# 元语法 v1：只有结构，没有作用域——引用了不存在的规则也看不出来
 ${META_HEAD}Grammar (Line /\\n/ +)
 Rule    Head (Params ?) (Item *)

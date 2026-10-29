@@ -48,7 +48,7 @@ same('def s(p q) (list p q)\ndef t(r):\n  s 1 2\n...\n(w@ (t 0))', ['[1 2]'])   
 const tags = new Set; (function f(v) { if (P.isT(v)) { tags.add(v[0]); v.slice(1).forEach(f) } })(lisp('(- f 1)\n(w@ f (+ f 1))').ss.value)
 assert(tags.has('$') && tags.has('$$'))
 // @skip some：无色状态自动跳空白，有色规则内部不跳
-const some = P.grammar(`@skip some\n@color Str=Y\nDoc (Item *)\nItem (Str Word <)\nStr ("'" /[^']*/ "'")\nWord /\\w+/`)
+const some = P.grammar(`@skip some\n@color Str=Y\nDoc (Item *)\nItem (> Str Word <)\nStr ("'" /[^']*/ "'")\nWord /\\w+/`)
 const s2 = P.feed("  'a'   'x  y'  w1 ", 'f'); P.eat(some, s2); assert.deepStrictEqual(s2.value, ['a', 'x  y', 'w1'])
 const s3 = P.feed("' a '"); P.eat(some, s3); assert.deepStrictEqual(s3.value, [' a '])
 console.log('smoke ok')

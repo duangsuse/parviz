@@ -483,7 +483,7 @@ const Step = {
     popup(pos, m => {
       m.append(h('div', 'hd', h('b', null, ...desc), `  ${this.ord()}`))
       if (e.ch && e.al) {   // 处于有序选择中（蓝色）时列出这个选择包含的各项
-        const al = h('div', 'alts', '(')
+        const al = h('div', 'alts', '(> ')
         e.al.xs.forEach((x, j) => { const s = h('span', j == e.al.j ? 'cur' : null, clip(x, 14)); s.dataset.rule = x; al.append(s) })
         al.append(' <)'); m.append(al)
       }

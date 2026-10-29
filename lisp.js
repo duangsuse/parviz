@@ -20,7 +20,7 @@ const CALC = `# 四则运算：(Atom (- "+" "-"; "*" "/" -)) 是 TDOP 风格的�
 Calc   (Exp ";" +) :global :tag("..")
 Exp    (App (- "+" "-"; "*" "/" -)) :infix
 App    Atom (Atom *) :apply
-Atom   (Num ("(" Exp ")" :par) Lam Name <)
+Atom   (> Num ("(" Exp ")" :par) Lam Name <)
 Lam    "->" Param Exp :fn
 Param  /[A-Za-z_]\\w*/ :arg2nth
 Num    /\\d+(\\.\\d+)?/ :num
@@ -30,7 +30,7 @@ const CHAIN = `# 朴素四则运算：左递归 Sum ← Sum "+" Prod 在 PEG 里
 @color Num=B Add=P Mul=P
 Sum    Prod ((Add Prod) *) :chainl
 Prod   Atom ((Mul Atom) *) :chainl
-Atom   (Num ("(" Sum ")" :par) <)
+Atom   (> Num ("(" Sum ")" :par) <)
 Add    /[+-]/
 Mul    /[*\\/]/
 Num    /\\d+(\\.\\d+)?/ :num`
@@ -217,21 +217,21 @@ Stmt   Exp (Same *) :lstmt
 Same   Exp :lsame
 Exp    ((Chain ("?" Recur "Or" Recur ?) :if) :setRecur)
 Chain  Atom (Dot *) :chain
-Dot    ((".." (List Brk <) :dpipe) (("?.{" ".{" <) (Stmt *) "}" :par :cb) ("." (Mcall Str Dkey <)) Ttag <)
-Mcall  (("(" Dkey (Recur *) ")" :par) ("[" Dkey (Recur *) "]" :par) <) :mcall
-Atom   (Mono Num Str Lit Lam Let Set Defn Xargs Tpl Tweak List Brk Obj Name <)
-Lam    ((/\\((?=\\s*=>)/ "=>" Params (Recur *) ")" :par) (/\\[(?=\\s*=>)/ "=>" Params (Recur *) "]" :par) <) :fn
-Let    ((/\\((?=\\s*-\\s+${SYM}+\\s)/ "-" Var Recur ")" :par) (/\\[(?=\\s*-\\s+${SYM}+\\s)/ "-" Var Recur "]" :par) <) :let
-Set    ((/\\((?=\\s*->\\s+${SYM}+\\s)/ "->" Var Recur ")" :par) (/\\[(?=\\s*->\\s+${SYM}+\\s)/ "->" Var Recur "]" :par) <) :set
-Defn   "def" Var Params (Block Recur <) :defn
+Dot    (> (".." (> List Brk <) :dpipe) ((> "?.{" ".{" <) (Stmt *) "}" :par :cb) ("." (> Mcall Str Dkey <)) Ttag <)
+Mcall  (> ("(" Dkey (Recur *) ")" :par) ("[" Dkey (Recur *) "]" :par) <) :mcall
+Atom   (> Mono Num Str Lit Lam Let Set Defn Xargs Tpl Tweak List Brk Obj Name <)
+Lam    (> (/\\((?=\\s*=>)/ "=>" Params (Recur *) ")" :par) (/\\[(?=\\s*=>)/ "=>" Params (Recur *) "]" :par) <) :fn
+Let    (> (/\\((?=\\s*-\\s+${SYM}+\\s)/ "-" Var Recur ")" :par) (/\\[(?=\\s*-\\s+${SYM}+\\s)/ "-" Var Recur "]" :par) <) :let
+Set    (> (/\\((?=\\s*->\\s+${SYM}+\\s)/ "->" Var Recur ")" :par) (/\\[(?=\\s*->\\s+${SYM}+\\s)/ "->" Var Recur "]" :par) <) :set
+Defn   "def" Var Params (> Block Recur <) :defn
 Block  ":" (Stmt *) "..." :lblock
-Params (("(" (Pname *) (Rest ?) ")" :par) ("[" (Pname *) (Rest ?) "]" :par) <) :arg2nth
+Params (> ("(" (Pname *) (Rest ?) ")" :par) ("[" (Pname *) (Rest ?) "]" :par) <) :arg2nth
 Rest   /\\.\\./
-Xargs  ((/\\((?=\\s*xargs\\s*\\{)/ "xargs" Obj ")" :par) (/\\[(?=\\s*xargs\\s*\\{)/ "xargs" Obj "]" :par) <) :xargs
+Xargs  (> (/\\((?=\\s*xargs\\s*\\{)/ "xargs" Obj ")" :par) (/\\[(?=\\s*xargs\\s*\\{)/ "xargs" Obj "]" :par) <) :xargs
 List   ("(" (Recur *) ")" :par :lcall)
 Brk    ("[" (Recur *) "]" :par :tag("[]") :lbrk)
 Obj    ("{" (Pair *) "}" :par :tag("{}"))
-Pair   (Qs Key <) Recur
+Pair   (> Qs Key <) Recur
 Key    /${SYM}+/
 Dkey   /(?![/])${SYM}+/ :lit
 Num    /-?\\d+(\\.\\d+)?/ :num
@@ -246,9 +246,9 @@ Tpl    (Tbeg (Hole *) "\`") :tpl
 Ttag   (Tbeg1 (Hole *) "\`") :ttag
 Tweak  (/\\((?=\\s*tweak\\b)/ "tweak" Tname (Spec *) ")" :par) :tweak
 Spec   ("(" Tkind (Tidx *) ")" :par) :spec
-Tname  (Trec Tsym <)
+Tname  (> Trec Tsym <)
 Trec   ("{" (Tsym *) "}" :par :tag("rec"))
-Tidx   (Num Tsym <)
+Tidx   (> Num Tsym <)
 Tsym   /${SYM}+/ :lit
 Tkind  /vec2|color|num|size|angle|enum/ :lit
 Hole   "\${" Recur Tend

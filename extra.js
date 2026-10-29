@@ -41,14 +41,14 @@ const INI = `# INI：[节] 与 键 = 值；; 或 # 开头是注释；值依次�
 @skip /(?:[ \\t]+|[;#][^\\n]*)+/
 @color Name=G Key=P Num=B Str=Y Raw=Y kw=B
 Ini   (Line /\\r?\\n/ +) :ini
-Line  ((Sect Pair <) ?)
+Line  ((> Sect Pair <) ?)
 Sect  ("[" Name "]" :par)
 Name  /[^\\]\\n]+/
 Pair  Key "=" Val
 Key   /[\\w.-]+/
-Val   (Num Bool Str Raw <)
+Val   (> Num Bool Str Raw <)
 Num   /-?\\d+(\\.\\d+)?(?=[ \\t]*(?:[;#\\r\\n]|$))/ :num
-Bool  (true false <)
+Bool  (> true false <)
 Str   /"(\\\\.|[^"\\\\\\n])*"/ :str
 Raw   /[^;#\\r\\n]*[^\\s;#]/`
 
@@ -77,7 +77,7 @@ Sel    /[^,{}\\/\\s](?:[^,{}\\/]*[^,{}\\/\\s])?/
 Decl   Prop ":" Value (";" ?)
 Prop   /-?[a-zA-Z][\\w-]*/
 Value  (Val *) :text
-Val    (Num Color Str Call Word Sep <)
+Val    (> Num Color Str Call Word Sep <)
 Num    /-?(?:\\d+\\.?\\d*|\\.\\d+)(?:%|[a-z]+)?/
 Color  /#[0-9a-fA-F]{3,8}\\b/
 Str    /"[^"\\n]*"|'[^'\\n]*'/
@@ -91,18 +91,18 @@ const SQL = `# SQL SELECT 子集。大写关键字写成字面量 "SELECT"（元
 @color Num=B Str=Y Ident=P Fn=G
 Query  "SELECT" (Distinct ?) Cols "FROM" Table (Where ?) (Order ?) (Limit ?) :select
 Distinct "DISTINCT" :text
-Cols   (("*" :text) (Col "," +) <)
+Cols   (> ("*" :text) (Col "," +) <)
 Col    Exp (As ?)
 As     "AS" Ident
-Table  Ident ((As Ident <) ?)
+Table  Ident ((> As Ident <) ?)
 Where  "WHERE" Exp
 Order  "ORDER" "BY" (Key "," +)
 Key    Exp (Dir ?)
 Dir    /ASC|DESC/
 Limit  "LIMIT" Num
 Exp    (Atom (- "OR"; "AND"; "=" "<>" "!=" "<=" ">=" "<" ">"; "+" "-"; "*" "/" -))
-Atom   (Num Str Call ("(" Exp ")" :par) Ident <)
-Call   Fn ("(" (("*" :text) (Exp "," +) <) ")" :par) :sqlcall
+Atom   (> Num Str Call ("(" Exp ")" :par) Ident <)
+Call   Fn ("(" (> ("*" :text) (Exp "," +) <) ")" :par) :sqlcall
 Fn     /[A-Za-z_]\\w*(?=\\()/
 Num    /\\d+(\\.\\d+)?/ :num
 Str    /'(?:''|[^'])*'/ :sq
@@ -115,16 +115,16 @@ const MINI = `# 迷你脚本：let 定义、箭头函数、调用、if 表达式
 @color Num=B Str=Y
 @walk calc
 Prog   (Stmt ";" +) :global :tag("..")
-Stmt   (Let Exp <)
+Stmt   (> Let Exp <)
 Let    "let" Var "=" Exp :let
-Exp    (If Lam Bin <)
+Exp    (> If Lam Bin <)
 If     "if" Exp "then" Exp "else" Exp :tag("?")
 Lam    Params "=>" Exp :fn
-Params (("(" ((Pname "," +) ?) ")") Pname <) :arg2nth
+Params (> ("(" ((Pname "," +) ?) ")") Pname <) :arg2nth
 Bin    (Call (- "==" "!=" "<=" ">=" "<" ">"; "+" "-"; "*" "/" "%" -)) :infix
 Call   Atom (Args *) :call
 Args   ("(" ((Exp "," +) ?) ")" :par)
-Atom   (Num Str Arr ("(" Exp ")" :par) Name <)
+Atom   (> Num Str Arr ("(" Exp ")" :par) Name <)
 Arr    ("[" ((Exp "," +) ?) "]" :par :tag(".."))
 Num    /\\d+(\\.\\d+)?/ :num
 Str    /"(\\\\.|[^"\\\\])*"/ :str

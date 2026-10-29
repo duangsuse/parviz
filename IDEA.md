@@ -14,9 +14,9 @@
 
 ```
 # see also https://regex101.com/r/tA9pM8/1
-Json  ((Val Lit null true false <) ~) # 有序选择（PEG）和指定递归"Recur"起点。不支持左递归，支持链
+Json  ((> Val Lit null true false <) ~) # 有序选择（PEG）和指定递归"Recur"起点。不支持左递归，支持链
 
-Val ( ("[" (Recur "," +) "]" :par)   ("{" (Str":"Recur "," +) "}" :par) <)
+Val ( (> "[" (Recur "," +) "]" :par)   ("{" (Str":"Recur "," +) "}" :par) <)
 
 # (... +) for join(0~N), (... :par) for custom func (add pairing hint)
 
@@ -80,7 +80,7 @@ AST 显示应为如下格式： [Val.A [.. "name" "parviz"]  ] [-Table [Row [..n
 
 总之，确保像函数调用。Lisp 不要把 =, => 这些噪音显示出来，而是 [.. [= big [=> [.. xs n]]] ...] 那样，正确利用多态
 
-步进面板，不显示失败的回溯的，只是在选区为黄色时显示 (Val Lit null.. <) 包含的那些项（显示其前缀）。  stack不要只显示规则名，是 "预览前缀 ./feed$A:row:col" ，规则名在悬停时才用setSelection在#rules里指出来。 默认文件名改成 feed$A
+步进面板，不显示失败的回溯的，只是在选区为黄色时显示 (> Val Lit null.. <) 包含的那些项（显示其前缀）。  stack不要只显示规则名，是 "预览前缀 ./feed$A:row:col" ，规则名在悬停时才用setSelection在#rules里指出来。 默认文件名改成 feed$A
 
 【解析】等按钮让人困惑。应该删掉此栏（手机上改为对右键和Ctrl+Ent,F8..的模拟按钮）。  实际应onblur自动解析，Ctrl+Enter执行带walker的语法。 确保eval的实现足够独立，手工可维护
 
