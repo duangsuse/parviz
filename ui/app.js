@@ -255,6 +255,18 @@ const conUI = Console.mount($('#out'), {
   hover: (s, el) => { Sloc.hov = { from: SL.textEnd(el), to: src.rect(s.a, Math.max(s.b, s.a + 1)), cls: 'e' }; HL.set('hov', { hov: [src.range(s.a, Math.max(s.b, s.a + 1))] }); Sloc.draw() },
   leave: () => { if (Sloc.hov?.from) Sloc.hover(null) },
 })
+/* ---------- 暂停视图(与 p5 页共用 ui/pause.js):弹框 / REPL 两种呈现 ---------- */
+const PAUSE = Pause.create({
+  ed: src, dbg: DBG, status, mode: 'popup', resume: () => EvStep.next('run'),
+  push: item => conUI.push(item), last: () => conUI.last(),
+  name: e => DBG.nameOf(e) || EvStep.w.fname(e.f), show: (v, d) => EvStep.w.show(v, d),
+  sloc: a => S.ss.sloc(a),
+})
+PAUSE.bindToggle($('#pmode'))
+/* ---------- 会话 / 目录树(Ctrl+E 打开,Ctrl+S 保存;与 p5 页共用 ui/session.js + ui/explorer.js) ---------- */
+const SESS = Session.create({ ed: src, status, onOpen: () => { EvStep.stop(); parse() } })
+const EXP = Explorer.mount({ session: SESS, status })
+$('#files').onclick = () => EXP.toggle()
 function renderOut() {
   const ss = S.ss, items = []
   if (Sloc.hov?.from) Sloc.hover(null)   // 输出重排，旧的错误连线作废
@@ -519,30 +531,63 @@ function fnBreaks(prog, marks) {
   }
   go(prog); return { names, moved }
 }
+// 函数名断点:源码里所有同名词条标红
+function paintBp() {
+  const rs = [], ss = S.ss
+  if (ss?.tree && DBG.names.size) walk(ss.tree, n => { if (!n.kids.length && n.k == 'tok' && n.b > n.a && DBG.hasName(ss.src.slice(n.a, n.b))) rs.push(src.range(n.a, n.b)) })
+  HL.set('bp', { bp: rs })
+}
+DBG.onCond = (e, c, name) => {   // 日志断点:条件成立时记一行,不暂停
+  if (c.bad) return
+  const r = PAUSE.evalAt(e, c.ast, c.prev); c.prev = e.args
+  const line = (cls, text) => EvStep.logs.push({ cls, text, span: e.a != null ? { a: e.a, b: e.b } : null })
+  if (r.err !== undefined) { c.bad = true; line('warn', `日志断点 ${name} ? ${c.text}：${r.err}（已停用）`); return }
+  if (LISP.truthy(r.value)) line('info', `⏺ [${name}${(e.args || []).map(a => ' ' + EvStep.w.show(a, 1)).join('')}] ⇒ ${EvStep.w.show(e.v, 1)}`)
+}
 const EvStep = {
   it: null, n: 0, w: null,
+  fromMarks: new Set,   // 由 $n 标记变成的函数断点(用户自己用 F8 / 即时求值设的名字不在里面,不会被每步重算冲掉)
+  mute: new Set,        // F8 在暂停处取消的断点('a:b' 或函数名):本次运行里标记不再把它们加回来
+  logs: [],             // 日志断点(? 条件)的输出:运行结束时在结果后面补上(结果重绘会清掉控制台)
   start() {
     const v = S.ss?.value, w = S.g?.walk && P.walkers[S.g.walk]
     if (!w || !P.isT(v)) { status('当前语法没有 @walk'); return false }
-    Step.stop(); this.w = w; this.it = w.steps(v); this.n = 0
+    Step.stop(); this.w = w; this.it = w.steps(v); this.n = 0; this.mute.clear(); this.logs.length = 0; PAUSE.reset()
     DBG.setDoc(S.doc); DBG.mode = 'line'; DBG.lastKey = null
     return true
   },
-  stop() { if (!this.it) return; this.it = null; DBG.mode = 'run'; HL.set('ev', {}); menu.hidden = caretEl.hidden = true; status('') },
-  // 停：$n 标记（范围断点）、函数名标记（ret 时停）、#brk 的判断/返回、F11 的语句边界（line=true）
-  next(line) {
+  stop() { if (!this.it) return; this.it = null; DBG.mode = 'run'; PAUSE.hide(); status('') },
+  // 从当前位置继续到下一个停点。mode:'run' 只停在断点(F9)· 'line' 下一条语句(F10)· 'step' 下一个事件(F11)
+  // 停点:$n 标记(范围断点)、函数名(标记 / F8 / 日志断点以外的)、#brk 的判断/返回、DBG 的模式
+  next(mode = 'run') {
     if (!this.it && !this.start()) return
-    const marks = Marks.list(), B = this.brk(), { names, moved } = fnBreaks(S.ss.value, marks)
-    DBG.names = names
-    DBG.bps = new Set(marks.filter((m, i) => !moved.has(i)).map(m => m.a + ':' + m.b))
-    DBG.mode = line ? 'line' : 'run'
+    const ev = PAUSE.ev, marks = Marks.list(), B = this.brk(), { names, moved } = fnBreaks(S.ss.value, marks)
+    for (const n of this.fromMarks) DBG.name(n, false); this.fromMarks.clear()
+    for (const n of names) if (!this.mute.has(n) && !DBG.hasName(n)) { DBG.name(n, true); this.fromMarks.add(n) }
+    DBG.bps = new Set(marks.filter((m, i) => !moved.has(i)).map(m => m.a + ':' + m.b).filter(k => !this.mute.has(k)))
+    DBG.mode = mode; DBG.lastKey = mode == 'line' ? DBG.keyAt(ev) : null
+    paintBp()
+    let send = PAUSE.take(); PAUSE.hide()   // (OK v) 替换的返回值只送给这次要恢复的暂停点
     for (let g = 0; g < 1e6; g++) {
-      const r = LISP.step(this.it); this.n++
-      if (r.done) { const n = this.n; this.stop(); setResult({ run: r.value, show: this.w.show, label: `逐步执行完毕（${n} 步）` }); return }
+      const r = LISP.step(this.it, send); send = undefined; this.n++
+      if (r.done) { const n = this.n, logs = this.logs.splice(0); this.stop(); setResult({ run: r.value, show: this.w.show, label: `逐步执行完毕（${n} 步）` }); for (const l of logs) conUI.push(l); return }
       const e = r.value
       const why = DBG.hit(e) || (e.a != null && ((e.ph == 'if' && B.dec) || (e.ph == 'ret' && B.re?.test(this.w.fname(e.f)))) ? 'brk' : null)
       if (why) return this.show(e, why)
     }
+  },
+  // F8:暂停中 = 取消这里的断点并继续;没暂停 = 在光标下的函数名上切换断点
+  toggleBreak() {
+    const e = PAUSE.ev
+    if (!e) {
+      const [c] = src.caret(), t = src.value, m = /[^\s()\[\]{}",;?.#]*$/.exec(t.slice(0, c))[0] + /^[^\s()\[\]{}",;?.#]*/.exec(t.slice(c))[0]
+      if (!m) { status('F8:光标放在函数名上切换断点;暂停时 F8 = 取消这里的断点并继续'); return }
+      status(`断点 ${m} ${DBG.name(m) ? '已设置' : '已取消'}（共 ${DBG.names.size} 个）`); paintBp(); return
+    }
+    const nm = e.ph == 'ret' ? DBG.nameOf(e) : null
+    if (nm) { DBG.name(nm, false); this.mute.add(nm) }
+    else if (DBG.hasRange(e.a, e.b)) { DBG.range(e.a, e.b); this.mute.add(e.a + ':' + e.b) }
+    this.next('run'); status(nm ? `已取消断点 ${nm}，继续运行` : '继续运行')
   },
   // #brk：以 | 分隔；单独的 ? 表示判断，其余合成正则整体匹配函数名（默认 ?|.* 即所有判断与所有返回）
   brk() {
@@ -550,18 +595,7 @@ const EvStep = {
     let re = null; if (rest.length) try { re = new RegExp('^(?:' + rest.join('|') + ')$') } catch { status('F8 中断模式不是合法正则') }
     return { dec: alts.includes('?'), re }
   },
-  show(e, why) {
-    const a = e.a, b = e.b, sh = this.w.show, tag = why == 'line' ? '语句 ' : why == 'name' ? '函数 ' : why == 'bp' ? '标记 ' : ''
-    const txt = e.ph == 'ret' ? `[${this.w.fname(e.f)}${e.args.map(a => ' ' + sh(a, 1)).join('')}] ⇒ ${sh(e.v, 1)}`
-      : e.ph == 'if' ? `? ${sh(e.c, 1)} → ${e.t ? '真分支' : '假分支'}`
-      : e.ph == 'in' ? `⇢ 进入` : `⇠ ${sh(e.v, 1)}`
-    if (a != null) { HL.set('ev', { ev: [src.range(a, Math.max(b, a + 1))] }); src.scrollTo(a) }
-    popup(a ?? b ?? 0, m => {
-      m.append(h('div', 'hd', h('b', null, tag + txt), `  总步骤 #${this.n}`))
-      m.append(h('div', 'fr', h('span', null, a != null ? clip(S.ss.src.slice(a, b).replace(/\s+/g, ' '), 40) : ''), h('span', 'sl', S.ss.sloc(a ?? 0))))
-    })
-    status(`逐步执行 第 ${this.n} 步`)
-  },
+  show(e, why) { PAUSE.show(e, why); status(`逐步执行 第 ${this.n} 步 · F9 继续 · F10 下一语句 · F11 单步 · F8 取消此断点并继续`) },
 }
 
 /* ---------- 代码补齐：关键字集合在 ss.comp 登记的候选 ---------- */
@@ -620,8 +654,13 @@ function onKey(e) {
   if (/^[1-6]$/.test(e.key) && !e.ctrlKey && !e.altKey && !e.metaKey && !e.target.isContentEditable && !/^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) {
     toolSel.selectedIndex = +e.key - 1; toolSel.onchange(); e.preventDefault(); return
   }
-  if (e.key == 'F8') { EvStep.next(false); e.preventDefault(); return }        // 继续到断点/判断
-  if (e.key == 'F11') { EvStep.next(true); e.preventDefault(); return }        // 下一条语句
+  if ((e.key == 'e' || e.key == 'E') && (e.ctrlKey || e.metaKey)) { EXP.toggle(); e.preventDefault(); return }
+  if ((e.key == 's' || e.key == 'S') && (e.ctrlKey || e.metaKey)) { EXP.save(); e.preventDefault(); return }
+  // 和 p5 页同一套键:F8 切换断点(暂停中 = 取消并继续)· F9 继续 · F10 下一条语句 · F11 下一个事件
+  if (e.key == 'F8') { EvStep.toggleBreak(); e.preventDefault(); return }
+  if (e.key == 'F9') { EvStep.next('run'); e.preventDefault(); return }
+  if (e.key == 'F10') { EvStep.next('line'); e.preventDefault(); return }
+  if (e.key == 'F11') { EvStep.next('step'); e.preventDefault(); return }
   if (e.key == 'Escape') { EvStep.stop(); return }
   if (e.target === src.el) {
     if (e.key == 'Enter' && (e.ctrlKey || e.metaKey)) { execute(); e.preventDefault() }
@@ -688,7 +727,7 @@ function load(i, text, spec = text) {
   writeHash(headOf(x), S.srcSpec)
   S.ss = null; S.onedit = null; Edits.seq = null; S.folds.clear(); S.unfold.clear()
   rules.value = rulesOf(x)
-  src.value = s; status(''); compile()
+  src.value = s; SESS.detach(); status(''); compile()
 }
 async function fetchText(url) {
   const r = await fetch(url); if (!r.ok) throw new Error(`HTTP ${r.status}`)

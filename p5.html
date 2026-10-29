@@ -30,7 +30,7 @@ main{flex:1;display:flex;min-height:0}
 #fbinfo .hd{color:var(--Y)} #fbinfo .calls{margin-bottom:4px} #fbinfo .call{display:inline-block;margin:0 10px 0 0;color:var(--B);cursor:pointer} #fbinfo .call:hover{background:#2b3a55}
 #tp{flex:none;background:var(--bg2);border-bottom:1px solid var(--bd);font-size:12px;max-height:45%;overflow:auto}
 #tp>summary{cursor:pointer;padding:2px 12px;color:var(--mut);position:sticky;top:0;background:var(--bg2);z-index:1;white-space:nowrap}
-#tp>summary select{width:4em;padding:0 2px;font-size:12px;margin-left:6px;vertical-align:baseline}
+#tp>summary select{width:8em;padding:0 2px;font-size:12px;margin-left:6px;vertical-align:baseline}
 #tpbar{display:flex;gap:6px;padding:2px 12px;align-items:center} #tpbar button{padding:0 6px;font-size:12px}
 #tpimp{width:12em;background:#2f3440;color:var(--fg);border:1px solid var(--bd);border-radius:3px;font:inherit;font-size:12px;padding:0 4px}
 #tplinks a{color:var(--B);margin-right:4px;text-decoration:none;border-bottom:1px dotted var(--B)} #tplinks a.on{color:var(--Y);border-color:var(--Y)}
@@ -55,7 +55,7 @@ pre{margin:0}
 #out .log{color:var(--fg)} #out .info{color:var(--B)} #out .warn{color:var(--Y)} #out .cm{color:var(--mut)}
 #out .eitem,#out .error{display:block;color:var(--R)}
 #out .eitem{cursor:pointer} #out .eitem:hover{background:#3a2a2e}
-#out .pause{color:var(--Y);cursor:pointer} #out .pause:hover{background:#3a3524}
+
 #pv{flex:1;display:flex;align-items:center;justify-content:center;overflow:auto;background:#14161b;padding:8px}
 #pv canvas{box-shadow:0 2px 14px #0009}
 #pv {
@@ -85,29 +85,22 @@ pre{margin:0}
 #tw{position:fixed;z-index:60;display:none;background:var(--bg2);border:1px solid var(--bd);border-radius:6px;padding:6px;box-shadow:0 6px 24px #000a;font-size:12px;color:var(--mut)}
 #tw canvas{display:block;cursor:crosshair;border-radius:3px}
 /* 目录树（Ctrl+E）：左侧浮层，不挤压画布 */
-#exp{position:fixed;left:0;top:36px;bottom:0;width:260px;z-index:50;background:var(--bg2);border-right:1px solid var(--bd);display:flex;flex-direction:column;box-shadow:6px 0 24px #0006}
-#exp[hidden]{display:none}
-#exp .hd{display:flex;align-items:center;gap:6px;padding:2px 8px;border-bottom:1px solid var(--bd);color:var(--mut);font-size:12px}
-#exp .hd b{color:var(--fg);font-weight:normal;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#exlist{flex:1;overflow:auto;padding:4px 0;font-size:12px}
-#exlist div{padding:1px 8px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#exlist div:hover{background:#2f3440}
-#exlist .dir{color:var(--Y)}
-#exlist .cur{color:var(--B)}
 #tw .row{display:flex;align-items:center;gap:8px;color:var(--fg)}
 #tw input[type=color]{width:64px;height:30px;padding:0;border:1px solid var(--bd);border-radius:3px;background:none;cursor:pointer}
 #tw div:not(.row){margin-top:4px}
 @media (max-width:900px){main{flex-direction:column}#left{flex:1 1 55%;border-right:0}}
 </style>
+<link rel="stylesheet" href="ui/pause.css"><link rel="stylesheet" href="ui/explorer.css">
 <style id="hlc"></style>
 <style id="twst"></style>
 </head>
 <body>
 <header>
-  <b>parviz · p5</b> <a href="./index.html" title="回到递归下降调试器">debugger</a>
+  <b><a href="./index.html">parviz</a> × p5</b>
   <button id="play" title="运行（Ctrl+Enter）：toplevel 语句 = setup，tick.{ } 每个重画帧跑，see.{ } 固定 20 Hz 物理帧">▶ 运行</button>
   <button id="rate" title="fps：画布每秒重画次数（p.draw）· Hz：see 物理帧每秒次数（frameRate 60 20 的第二个数）。点击：在 0 fps（停止重画）与 frameRate 的值（默认 60）之间切换。停止：Ctrl+Shift+Enter">— fps · — Hz</button>
   <button id="resume" title="断点处继续（F9 继续 · F10 下一行 · F8 取消断点并继续 · F11 下一帧）" hidden>⏯ 继续</button>
+  <button id="pmode"></button>
   <button id="files" title="打开文件夹（Ctrl+E）· Ctrl+S 保存">🗀 文件夹</button>
   <label title="编辑后自动重新运行"><input type="checkbox" id="auto"> 自动刷新</label>
   <select id="ex" title="内置示例"></select>
@@ -116,7 +109,7 @@ pre{margin:0}
 </header>
 <main>
   <section id="left">
-    <div class="tab"><b>sketch.lisp</b></div>
+    <div class="tab"><b id="tabname" title="双击改名（Ctrl+S 总是覆盖同名文件）">sketch.lisp</b></div>
     <details id="tp"><summary>Tweak <span id="tpn"></span><select id="tppre" title="预设：选择即把一组参数值写回源码；改了值就回到【当前预设】"></select></summary>
       <div id="tpbar"><input id="tpimp" placeholder="粘贴单个预设 JSON 导入" title="粘贴单个预设的单行 JSON 即导入"><button id="tpexp" title="把当前这一套参数值导出为单行 JSON（复制到剪贴板）">导出</button><span id="tplinks"></span></div>
       <div id="tprows"></div>
@@ -136,10 +129,6 @@ pre{margin:0}
     <div id="pv"></div>
   </section>
 </main>
-<aside id="exp" hidden>
-  <div class="hd"><b id="expname">目录</b><button id="expclose" title="关闭（Ctrl+E）">×</button></div>
-  <div id="exlist"></div>
-</aside>
 <div id="ov"><svg><g></g></svg><div id="mks"></div></div>
 <script src="https://cdn.jsdelivr.net/npm/p5@1.9.4/lib/p5.min.js"></script>
 <script src="parse.js"></script>
@@ -149,6 +138,7 @@ pre{margin:0}
 <script src="ui/xref.js"></script>
 <script src="ui/console.js"></script>
 <script src="ui/debug.js"></script>
+<script src="ui/pause.js"></script>
 <script src="ui/session.js"></script>
 <script src="ui/explorer.js"></script>
 <script src="p5/exec.js"></script>

@@ -1,12 +1,16 @@
-/* explorer.js — p5 页左侧的目录树（Ctrl+E）。Chrome 上用 File System Access 句柄打开目录、读写文件；
+/* explorer.js — 左侧的目录树（Ctrl+E；index.html / p5.html 共用，面板 DOM 自己建，样式见 ui/explorer.css）。
+   API：Explorer.mount({ session, status, host? }) → { toggle, save, close, dir }；session = ui/session.js 的 Session.create(...)。Chrome 上用 File System Access 句柄打开目录、读写文件；
    没有 showDirectoryPicker 时退回 <input type=file>（只读打开）+ 下载保存。目录逐层加载，点目录展开。 */
 (function (G) {
 'use strict'
-const $ = s => document.querySelector(s)
 const OK = /\.(lisp|txt|md|js|json|css|html?)$/i
 
-function mount({ session, status }) {
-  const panel = $('#exp'), list = $('#exlist'), title = $('#expname'), close = $('#expclose')
+function mount({ session, status, host = document.body }) {
+  const panel = document.createElement('aside'), list = document.createElement('div'), title = document.createElement('b'), close = document.createElement('button')
+  panel.className = 'exp'; panel.hidden = true; list.className = 'exlist'; title.textContent = '目录'; close.textContent = '×'; close.title = '关闭（Ctrl+E）'
+  const hd = document.createElement('div'); hd.className = 'hd'; hd.append(title, close); panel.append(hd, list); host.append(panel)
+  const place = () => { panel.style.top = (document.querySelector('header')?.offsetHeight ?? 36) + 'px' }   // 顶栏高度因页面而异
+  const showPanel = () => { place(); panel.hidden = false }
   let dir = null, input = null
 
   function entryRow(host, e, depth) {
@@ -44,14 +48,14 @@ function mount({ session, status }) {
     if (!G.showDirectoryPicker) return pickFile()
     try { dir = await G.showDirectoryPicker({ mode: 'readwrite' }) } catch (e) { if (e.name != 'AbortError') status('打开文件夹失败：' + e.message); return }
     session.dir = dir; title.textContent = dir.name; list.textContent = ''
-    await listDir(list, dir, 0); panel.hidden = false
+    await listDir(list, dir, 0); showPanel()
   }
   function pickFile() {
     if (!input) {
       input = document.createElement('input'); input.type = 'file'; input.accept = '.lisp,.txt,.md,.js,.json,.css,.html'
       input.onchange = async () => {
         const f = input.files[0]; if (!f) return
-        if (session.openText(await f.text(), f.name, null)) { title.textContent = f.name; panel.hidden = false }
+        if (session.openText(await f.text(), f.name, null)) { title.textContent = f.name; showPanel() }
       }
     }
     input.click()
@@ -59,9 +63,10 @@ function mount({ session, status }) {
   async function toggle() {
     if (!panel.hidden) { panel.hidden = true; return }
     if (!dir) return pickDir()
-    panel.hidden = false; list.textContent = ''; await listDir(list, dir, 0)
+    showPanel(); list.textContent = ''; await listDir(list, dir, 0)
   }
   close.onclick = () => panel.hidden = true
+  session.onCreate = () => { if (dir && !panel.hidden) { list.textContent = ''; listDir(list, dir, 0) } }   // 保存时在目录里新建了文件
   return { toggle, save: () => session.save(), close: () => panel.hidden = true, get dir() { return dir } }
 }
 G.Explorer = { mount }

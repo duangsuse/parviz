@@ -65,7 +65,7 @@ const staticHost = L.hostOf(Object.fromEntries(DEFS.map(n => [n, 0])), p5.protot
 const base = g.builtins; g.builtins = { has: n => base.has(n) || staticHost.has(n) }
 
 /* ---------- 一次运行 = 一个 p5 实例 + 一份宿主；停止/重跑后旧运行里挂起的执行都会作废 ---------- */
-let cur = null, pausedEv = null, lastPool = null
+let cur = null, lastPool = null
 // 断点：函数名（Lisp 函数的名字，或调用处写的名字，JS 函数如 circle / log 也行）；状态在 DBG.names 里
 
 const headName = Pick.headName
@@ -116,6 +116,7 @@ function newRun(ss) {
   run.host = Object.assign(L.hostOf(defs, () => run.p, p5.prototype, PVARS, globalThis), {
     run,          // cx.run：控制台行/后续 Tweak 部件按运行归属
     hooks: { ext: null },   // 取源的钩子：setup 期间 / 被请求的那一帧才装（见 pick.js），平时 call() 只多一次 null 判断
+    watch: DBG.watch,       // 没有范围断点、也不在单步时，lisp.js 不产出 in/out/if 节点事件
     last: true,   // 函数体取最后一句的值，不要求 OK
     log: { push: item => con(item) },
     alive: () => run.alive,
@@ -147,80 +148,32 @@ $.ev(src.el, {
     src.setSel(n.b); paintBp(); status(`断点 ${t} ${on ? '已设置' : '已取消'}（共 ${DBG.names.size} 个）`)
   },
 })
-/* ---------- 暂停：显示 [f 实参] ⇒ 返回值，下面一个输入框在这一帧里即时求值 ----------
-   输入 (+ x 1)        → 求值并打印结果，继续停着
-   输入 (OK 值)        → 用这个值替换这次调用的返回值并继续（暂停点兑现 { v }，见 lisp.js call）
-   输入 ? (== x 1)     → 这个函数转成日志断点：以后条件成立时自动打印一行，不再暂停（单独一个 ? 表示每次都打印）
-   名字查这一帧的环境；@args / @ret 是这次调用的实参数组和返回值。 */
-const gc = grammar(L.RULES); gc.builtins = { has: () => true }   // 即时求值：名字运行期查帧环境，解析期不报“未定义”
-function parseExpr(text) { const q = feed(text); eat(gc, q); return q.errs.length ? { err: q.errs[0].msg } : { ast: q.value } }
-let pausedSend = null, evalInp = null, userLeft = false   // userLeft：最近一次按下发生在输入框之外（用户主动离开），否则失焦一律抢回
-document.addEventListener('pointerdown', e => { userLeft = !!evalInp && e.target !== evalInp }, true)
-const takeSend = () => { const v = pausedSend; pausedSend = null; return v || undefined }
+/* ---------- 暂停:呈现与即时求值在 ui/pause.js(REPL / 弹框两种呈现,同一套输入框;开关在顶栏 #pmode) ---------- */
 const callName = e => DBG.nameOf(e) || headName(e.x?.[1]) || e.f?.name || L.fname(e.f)
-// A B C… = 这次调用的第 1 2 3… 个实参；$A $B $C… = 同一个断点上一次命中时的同一位置实参（第一次是 NO）
-const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-const evalAt = (e, ast, prev) => {
-  const x = { '@args': e.args, '@ret': e.v }
-  ;(e.args || []).slice(0, 26).forEach((v, i) => { x[LETTERS[i]] = v; x['$' + LETTERS[i]] = prev?.[i] ?? L.NO })
-  return L.evalIn(ast, e.env, x)
-}
+const PAUSE = Pause.create({
+  ed: src, dbg: DBG, status, resume: () => resume(), mode: 'repl',
+  push: item => OUT.push(item), last: () => OUT.last(),
+  name: callName, show: L.show, sloc: a => cur?.ss ? cur.ss.sloc(a) : '',
+  onEscape: () => { Sloc.vis = null; Sloc.draw() }, onChange: () => paintBp(),
+})
+const evalAt = PAUSE.evalAt
+PAUSE.bindToggle($('#pmode'))
 DBG.onCond = (e, c, name) => {
   if (c.bad) return
   const r = evalAt(e, c.ast, c.prev); c.prev = e.args
   if (r.err !== undefined) { c.bad = true; con({ warn: `日志断点 ${name} ? ${c.text}：${r.err}（已停用）`, a: e.a, b: e.b }); return }
   if (L.truthy(r.value)) con({ out: `⏺ [${name}${(e.args || []).map(a => ' ' + L.show(a, 1)).join('')}] ⇒ ${L.show(e.v, 1)}`, a: e.a, b: e.b })
 }
-function pauseInput(row, e) {
-  if (!row || e.ph != 'ret' || !e.env) return
-  const inp = document.createElement('input')
-  inp.placeholder = '即时求值 · (OK 值) 替换返回并继续 · ? 条件 → 日志断点'
-  inp.style.cssText = 'display:block;width:100%;margin:2px 0 3px;background:#2f3440;color:var(--fg);border:1px solid var(--bd);border-radius:3px;font:11px/1.5 inherit;padding:1px 4px'
-  inp.onclick = inp.onmousedown = ev => ev.stopPropagation()   // 输入框在可点击的控制台行里：别触发“跳转源码并聚焦编辑器”
-  inp.onblur = () => { if (evalInp === inp && !userLeft && inp.isConnected && !$('#resume').hidden) setTimeout(() => { if (!userLeft && inp.isConnected) inp.focus({ preventScroll: true }) }, 0) }   // 选区 / 取源 / 刷新等程序化操作把焦点带走时抢回
-  inp.onkeydown = ev => {
-    if (ev.key == 'Escape') { ev.preventDefault(); userLeft = true; Sloc.vis = null; Sloc.draw(); src.el.focus(); return }
-    if (!/^F\d+$/.test(ev.key)) ev.stopPropagation()   // 功能键（F8–F11）要漏给全局快捷键，其余按键留给输入框
-    if (ev.key != 'Enter') return
-    ev.preventDefault()
-    const t = inp.value.trim(); if (!t) return
-    const log = t[0] == '?', p = parseExpr(log ? (t.slice(1).trim() ? `(> ${t.slice(1).trim()})` : 'true') : t)
-    if (p.err) { inp.style.borderColor = 'var(--R)'; status(p.err); return }
-    inp.style.borderColor = 'var(--bd)'
-    if (log) {
-      const name = callName(e), text = t.slice(1).trim() || 'true'
-      DBG.name(name, true); DBG.conds.set(name, { text, ast: p.ast }); paintBp()
-      con({ out: `⏺ 日志断点 ${name} ? ${text}`, cls: 'info' }); resume(); return
-    }
-    const r = evalAt(e, p.ast)
-    if (r.err !== undefined) { con({ err: r.err }); return }
-    if (r.ret) { pausedSend = { v: r.value }; con({ out: `↩ 返回值替换为 ${L.show(r.value, 1)}`, cls: 'info' }); resume(); return }
-    con({ out: `⇒ ${L.show(r.value, 1)}`, cls: 'info' }); inp.value = ''; inp.focus()
-  }
-  evalInp = inp; userLeft = false; row.append(inp); requestAnimationFrame(() => inp.focus())
-}
-function showPause(e, why) {
-  const a = e.a, b = e.b, sh = L.show, name = e.ph == 'ret' ? callName(e) : e.f?.name || headName(e.x?.[1]) || L.fname(e.f)
-  const tag = why == 'frame' ? 'F11 帧' : why == 'line' ? 'F10 语句' : why == 'name' ? '断点' : '断点'
-  const what = e.ph == 'ret' ? `[${name}${(e.args || []).map(a => ' ' + sh(a, 1)).join('')}] ⇒ ${sh(e.v, 1)}`
-    : e.ph == 'if' ? `? ${sh(e.c, 1)} → ${e.t ? '真分支' : '假分支'}`
-    : e.ph == 'in' ? '⇢ 进入' : `⇠ ${sh(e.v, 1)}`
-  pausedEv = e
-  con({ pause: `⏸ ${what}   · ${tag}`, n: a != null ? { a, b } : null })
-  pauseInput(out.lastElementChild, e)
-  if (a != null) { HL.set('ev', { ev: [src.range(a, Math.max(b, a + 1))] }); src.scrollTo(a) }
-  $('#resume').hidden = false; status('已暂停（F9 继续 · F10 下一行 · F8 取消此断点并继续 · F11 下一帧）')
-}
-DBG.onPause = (e, why) => showPause(e, why)
+DBG.onPause = (e, why) => { PAUSE.show(e, why); $('#resume').hidden = false }
 function resume() {
   if (!cur) return
   const more = DBG._q.length > 1
-  HL.set('ev', {}); if (!more) { $('#resume').hidden = true; status('运行中') }
-  DBG.resume(takeSend())
+  PAUSE.hide(); if (!more) { $('#resume').hidden = true; status('运行中') }
+  DBG.resume(PAUSE.take())
 }
 function go(fn) {
   const more = DBG._q.length > 1
-  HL.set('ev', {}); if (!more) { $('#resume').hidden = true; status('运行中') }
+  PAUSE.hide(); if (!more) { $('#resume').hidden = true; status('运行中') }
   fn()
 }
 $('#resume').onclick = resume
@@ -402,8 +355,8 @@ function stop() {
   const run = cur; if (!run) return
   cur = null; run.alive = false; run.pk = null; L.host = null
   fbLeave(run)
-  DBG.cancel(); DBG.mode = 'run'; DBG.lastKey = null; pausedEv = null
-  HL.set('ev', {}); $('#resume').hidden = true
+  DBG.cancel(); DBG.mode = 'run'; DBG.lastKey = null; PAUSE.hide()
+  $('#resume').hidden = true
   try { run.p?.remove() } catch { }
   Sloc.reset(); Sloc.pick = null; status('已停止')
 }
@@ -413,7 +366,7 @@ function play() {
     for (const e of ss.errs) OUT.push({ cls: 'eitem', text: `✖ ${ss.sloc(e.a)}  ${e.msg}`, span: e })
     Sloc.draw(); status(`${ss.errs.length} 个语法错误，未运行`); return
   }
-  DBG.reset(); pausedEv = null; $('#resume').hidden = true   // 旧运行挂起的暂停先兑现
+  DBG.reset(); PAUSE.reset(); $('#resume').hidden = true   // 旧运行挂起的暂停先兑现
   const run = cur = newRun(ss); L.host = run.host; run.pool = ss.pool
   new p5(p => {
     run.p = p
@@ -457,12 +410,29 @@ function runBtn(name) {
 }
 
 /* ---------- 会话 / 目录树（Ctrl+E 打开，Ctrl+S 保存） ---------- */
+const tabEl = $('#tabname')
 const SESS = Session.create({
   ed: src, status,
+  onName: n => { tabEl.textContent = n || 'sketch.lisp' },
   onOpen: () => { parse(); if (cur) play(); else if ($('#auto').checked) play() },   // 打开文件后重解析；在跑就重跑
 })
 const EXP = Explorer.mount({ session: SESS, status })
 $('#files').onclick = () => EXP.toggle()
+// 双击文件名改名:Enter 确认(预设跟着搬到新名字下),Esc 取消
+tabEl.ondblclick = () => {
+  const b = tabEl, i = document.createElement('input'), old = b.textContent
+  i.value = old; i.style.cssText = 'font:inherit;width:' + Math.max(12, old.length + 2) + 'ch;background:var(--bg);color:var(--fg);border:1px solid var(--bd)'
+  b.replaceWith(i); i.focus(); i.select()
+  let done = false
+  const end = async ok => {
+    if (done) return; done = true
+    const key = 'parviz.presets:' + (SESS.name || location.hash || 'sketch')
+    if (ok && i.value.trim() && await SESS.rename(i.value)) { const v = localStorage.getItem(key); if (v != null) { localStorage.setItem('parviz.presets:' + SESS.name, v); localStorage.removeItem(key) } }
+    i.replaceWith(b); b.textContent = SESS.name || 'sketch.lisp'
+  }
+  i.onkeydown = e => { e.stopPropagation(); if (e.key == 'Enter') end(true); else if (e.key == 'Escape') end(false) }
+  i.onblur = () => end(true)
+}
 Pane.init({ ed: src, status, goto: (a, b) => goto(a, b), press: name => runBtn(name), docKey: () => SESS.name || location.hash || 'sketch' })
 
 /* ---------- 编辑器 ----------
@@ -514,14 +484,14 @@ $.ev(window, {
       $.event.preventDefault()
       if ($('#resume').hidden) { armed = !armed; status(armed ? 'F8：右键点画布上要断点的图形（再按 F8 取消）' : '已取消') }
       else {
-        const e = pausedEv, nm = e.ph == 'ret' ? DBG.nameOf(e) : null
+        const e = PAUSE.ev, nm = e.ph == 'ret' ? DBG.nameOf(e) : null
         if (nm) DBG.name(nm, false); else if (DBG.hasRange(e.a, e.b)) DBG.range(e.a, e.b)
         paintBp(); resume(); status(nm ? `已取消断点 ${nm}，继续运行` : '继续运行')
       }
     }
     else if (k == 'F9') { resume(); $.event.preventDefault() }
-    else if (k == 'F10') { go(() => DBG.stepLine(pausedEv, takeSend())); $.event.preventDefault() }
-    else if (k == 'F11') { go(() => DBG.nextFrame(pausedEv, takeSend())); $.event.preventDefault() }
+    else if (k == 'F10') { const e = PAUSE.ev, v = PAUSE.take(); go(() => DBG.stepLine(e, v)); $.event.preventDefault() }
+    else if (k == 'F11') { const e = PAUSE.ev, v = PAUSE.take(); go(() => DBG.nextFrame(e, v)); $.event.preventDefault() }
     else if (k == 'Escape' && cur?.view != null) fbLeave()
     else if ((k == 'ArrowLeft' || k == 'ArrowRight') && cur?.view != null && !$.event.target.isContentEditable) { fbStep(k == 'ArrowLeft' ? -1 : 1); $.event.preventDefault() }
     else if (k == 'Escape' && Sloc.vis) { Sloc.vis = null; Sloc.draw() }   // 清掉控制台悬停留在画布上的颜色 / 圆点
@@ -548,7 +518,7 @@ $.ev(split, {
 const ex = $('#ex')
 P5EX.forEach((e, i) => ex.append(h('option', null, `${i + 1}. ${e.name}`)))
 function load(i) {
-  ex.selectedIndex = i; src.value = P5EX[i].src; history.replaceState(null, '', '#' + (i + 1)); play()
+  ex.selectedIndex = i; src.value = P5EX[i].src; SESS.detach(); history.replaceState(null, '', '#' + (i + 1)); play()
 }
 ex.onchange = () => load(ex.selectedIndex)
 load(Math.min(Math.max((parseInt(location.hash.slice(1)) || 1) - 1, 0), P5EX.length - 1))

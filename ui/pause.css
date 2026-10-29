@@ -1,0 +1,21 @@
+/* pause.css — 暂停视图(ui/pause.js)的气泡与输入框;index.html / p5.html 共用 */
+.pcar{position:fixed;width:2px;background:#fff;z-index:21;pointer-events:none;animation:pbl 1s steps(2) infinite}
+@keyframes pbl{50%{opacity:.2}}
+.pbub{position:fixed;z-index:22;min-width:240px;max-width:60vw;max-height:42vh;overflow:auto;background:#2a2f3a;border:1px solid var(--bd);border-radius:4px;box-shadow:0 6px 18px #0008;font-size:12px;padding:3px 0}
+.pbub.ch{border-color:var(--B)}
+.pbub .hd{padding:2px 8px;color:var(--mut);border-bottom:1px solid var(--bd)}
+.pbub .hd b{color:var(--fg)}
+.pbub .hd .pv{background:linear-gradient(95deg, white, 1.2em, white, 1.2em, red, 50%, transparent);-webkit-background-clip:text;background-clip:text;color:transparent}
+.pbub .alts{padding:2px 8px;color:var(--B);border-bottom:1px solid var(--bd)}
+.pbub .alts span{padding:0 2px}
+.pbub .alts .cur{background:color-mix(in srgb,var(--B) 35%,transparent);color:#fff}
+.pbub .fr{padding:0 8px;display:flex;gap:12px;justify-content:space-between;cursor:default}
+.pbub .fr:hover{background:#3a4253}
+.pbub .fr.top{background:#344158}
+.pbub .fr .sl{color:var(--mut)}
+.pbub .plog{padding:0 8px;max-height:20vh;overflow:auto;white-space:pre-wrap}
+.pbub .plog .eitem{color:var(--R)}
+.pin{display:block;width:100%;box-sizing:border-box;margin:2px 0 3px;background:#2f3440;color:var(--fg);border:1px solid var(--bd);border-radius:3px;font:11px/1.5 inherit;padding:1px 4px}
+.pin.bad{border-color:var(--R)}
+.pbub .pin{width:calc(100% - 16px);margin:3px 8px}
+#out .pause{color:var(--Y);cursor:pointer} #out .pause:hover{background:#3a3524}

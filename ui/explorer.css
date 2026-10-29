@@ -1,0 +1,10 @@
+/* explorer.css — 目录树面板(ui/explorer.js 自己建 DOM);index.html / p5.html 共用 */
+.exp{position:fixed;left:0;top:36px;bottom:0;width:260px;z-index:50;background:var(--bg2);border-right:1px solid var(--bd);display:flex;flex-direction:column;box-shadow:6px 0 24px #0006}
+.exp[hidden]{display:none}
+.exp .hd{display:flex;align-items:center;gap:6px;padding:2px 8px;border-bottom:1px solid var(--bd);color:var(--mut);font-size:12px}
+.exp .hd b{color:var(--fg);font-weight:normal;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.exlist{flex:1;overflow:auto;padding:4px 0;font-size:12px}
+.exlist div{padding:1px 8px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.exlist div:hover{background:#2f3440}
+.exlist .dir{color:var(--Y)}
+.exlist .cur{color:var(--B)}

@@ -136,6 +136,17 @@ const exec = async src => { const ss = P.feed(src); P.eat(gh, ss); assert.deepSt
   r = await exec('console.[log "m" 1]\n[console.log "n" 2]\nconsole.log "o" 3\n(w@ Math.[max 1 5 3] (new Date 0).[getTime])'); console.log = saved
   assert.deepStrictEqual([seen.map(a => a.join(' ')), r.log], [['m 1', 'n 2', 'o 3'], ['5 0']])        // console.[log …] ≡ [console.log …] ≡ console.log …：JS 的 OOP，this 是 console
   r = await exec('def f(a):\n  (- b 1)\n  (+ a b)\n...\n(w@ (f 3))'); assert.deepStrictEqual(r.log, ['4'])   // host.last：多语句函数取最后一句，不要求 OK
+  // cx.watch：host.watch.nodes 为假时只剩 ret 事件（无 in/out/if）；为真或没有 watch 时节点事件照旧
+  { const evs = {}, w = { nodes: false, rets: true }
+    jsHost({ watch: w, pause: e => { evs[e.ph] = (evs[e.ph] || 0) + 1 } })
+    r = await exec('def sq(x) (* x x)\n(w@ (sq 3) (sq 4) (> 1 < 2)? 7 Or 8)'); assert.deepStrictEqual(r.log, ['9 16 7'])
+    assert(evs.ret > 0 && !evs.in && !evs.out && !evs.if, JSON.stringify(evs))
+    w.nodes = true; for (const k in evs) delete evs[k]
+    r = await exec('def sq(x) (* x x)\n(w@ (sq 3))'); assert(evs.in > 0 && evs.out > 0 && evs.ret > 0)
+    w.nodes = false; w.rets = false; for (const k in evs) delete evs[k]
+    r = await exec('def sq(x) (* x x)\n(w@ (sq 3))'); assert.deepStrictEqual([r.log, evs.ret, evs.in], [['9'], undefined, undefined])
+    r = await exec('(each (range 2000000) (=> (i) i))'); assert.match(r.err, /次调用/)   // 没有任何事件时，失控保护仍在 call() 里
+    r = await exec('def f(n) (f (> n + 1))\n(w@ (f 0))'); assert.strictEqual(r.err, '递归过深（调用栈溢出）'); assert(r.a != null && r.b > r.a); }   // 栈溢出：有跨度、不是原始的 RangeError 文本
   // 断点：pause 返回 Promise 就挂起到它兑现；alive 为 false 即放弃
   let hits = 0
   jsHost({ pause: e => e.ph == 'ret' && e.f?.name == 'sq' ? new Promise(r => setTimeout(() => { hits++; r() }, 10)) : undefined })

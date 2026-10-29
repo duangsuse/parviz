@@ -1,6 +1,6 @@
 # goal-viz.md — 下一版（可视化调试）实施计划
 
-状态：P1–P5 已实现并实测；`pick` 用 IDEA.md 的亮点法（另有 bbox 兜底）。已知边界见 §5。前置条件已满足：上一轮重构把显示层收成了扁平 `Doc`
+状态：P1–P5 与后续的 P6（Tweak 面板 / 预设 / 声明推断）、P7（帧缓冲）已全部实现并实测；`pick` 用 IDEA.md 的亮点法（另有 bbox 兜底）。已知边界见 §5。本文 §0–§4 保留设计时的草案口径，与实现不一致处以 §0.1 的“实现时定下的细节”和 README 为准。前置条件已满足：上一轮重构把显示层收成了扁平 `Doc`
 （`ui/doc.js` 三生产者 + `ui/tree.js` Mithril 同步渲染 + 共享 `ui/console.js` / `ui/sloc.js`），
 并在 headless Chromium 实测过树、步进、F8、xref、控制台跳转、增量顺延。
 
@@ -23,7 +23,10 @@
 | P3 pick | 完成：IDEA.md 的亮点法（帧起点撒点 + 逐 ctx 方法读回 + 栈顶归属），`Tweak.geo` bbox 兜底；`Sloc.pick` 画布→源码 |
 | P3 暂停改值 | 完成并改版：`ret` 暂停行下面是即时求值输入框（帧环境，`@args`/`@ret`）；`(OK v)` 兑现 `{v}` 替换返回值；`? 条件` 转日志断点（`DBG.conds`，`onCond` 打印不暂停）。此前的 JSON 输入框已删 |
 | P4 xref 共享 | 完成：`ui/xref.js` 两页共用；`Doc.edges` 填好；`Sloc.pick` 与 ref/rev 同层绘制 |
-| P5 会话/explorer | 完成：`ui/session.js`（文本/句柄/脏标记）+ `ui/explorer.js`（Ctrl+E，FSA 逐层目录树，无 FSA 退回文件选择）；页面仍保留自己的 `ss/cur`（单文档） |
+| P5 会话/explorer | 完成：`ui/session.js`（文本/句柄/脏标记）+ `ui/explorer.js`（Ctrl+E，FSA 逐层目录树，无 FSA 退回文件选择） ；两页都挂（主页 Ctrl+E / Ctrl+S，`Explorer` 自己建 DOM）。暂停呈现收进 `ui/pause.js`（REPL / 弹框开关 `⏸`，两页共用输入框逻辑）|
+| P6 Tweak 面板 / 预设（`71b31db`） | 完成：`p5/pane.js`（参数控件、预设保存/重命名/删除/单行 JSON 导入导出、按 `docKey` 存 localStorage）；`(tweak {x y} …)` 对象声明、`enum` 类、开关 `?.{`、按钮 `btn_`；未声明的 p5 函数按 `Tweak.DEFAULT_SRC` 推断，可一键写入源码顶部 |
+| P7 帧缓冲（`71b31db`） | 完成：`p5/fbuf.js`（画布副本 + 闭包环境快照 + 调用清单，`[frameBuffer N]`），只读回看，不重放 |
+| 语法修正（`5c669e0`） | `(> …)`/`[> …]` 内联中缀语法、`.{ }` 块内改为 `Stmt`、`see` 物理帧；`vendor/many.js`（未跟踪）是外部 p5 样例，非本项目代码 |
 
 实现时定下的细节（与下文草案不同处）：
 
@@ -34,6 +37,8 @@
 - 键位：p5 = `F8` 等右键设断点（暂停中 = 取消当前断点并继续）/ `F9` 继续 / `F10` 下一条语句 / `F11` 下一帧；index = `F8` 到断点或判断 / `F11` 逐语句。
 - 日志断点条件自动套 `(> …)`；`A B C…` = 本次实参，`$A $B…` = 同断点上次命中的实参（`DBG.conds[name].prev`）。
 - index 的步进器改用 `LISP.step(it)`（设置当前 `cx`），不再直接 `it.next()`。
+- 暂停改值已不是 §3 P3 草案里的“对 `$4` / 打印行对象字段生成部件”，也不是 JSON 输入框：现在是帧环境里的即时求值框（`evalIn`）+ `(OK v)` 替换返回值。
+- 键位以 p5 页为准：`F8` 取消当前断点并继续 / `F9` 继续 / `F10` 下一语句 / `F11` 下一帧。
 
 ---
 
@@ -248,8 +253,7 @@ Sloc.pick = { from: DOMRect, to: DOMRect, label, cls }   // 画布矩形 → 源
   双击函数名保留（调 `DBG.toggleName`）。
 - pick 模式：`cx.hooks.ext` 记录本帧的调用（名字、跨度、bbox 来自 P2 的几何声明）；
   点击画布 → 读像素/命中 → `Sloc.pick` + 选中源码 + 角标。
-- Tweak 运行时改值：暂停时对 `$4`/打印行里的对象字段生成部件，`set` 直接改对象并重绘该行；
-  无暂停帧或已结束的运行 → 部件禁用（带 tooltip）。
+- 暂停时改值：见 §0.1，实际落地为即时求值框 + `(OK v)`；无暂停帧时输入框不出现。
 
 验收：
 
@@ -257,7 +261,7 @@ Sloc.pick = { from: DOMRect, to: DOMRect, label, cls }   // 画布矩形 → 源
 - p5 暂停后 F8 → 下一帧 tick 入口；F11 在 tick 内逐语句。
 - pick：`background` 不会抢走归属（亮点在 `DBG.frame()` 里、早于第一笔用户绘制）。
 - 未声明格式的调用在 pick 下只报名字，不参与 bbox 命中（明确降级）。
-- 暂停时改 `$4` 对象字段 → 下一步读到新值；恢复运行后控制台行显示“已改”。
+- 暂停时 `(OK 值)` 替换返回值 → 恢复后下一步读到新值；`? 条件` 转日志断点只打印不暂停。
 
 ### P4 xref 共享 + p5 对齐（约半天）
 
@@ -335,6 +339,10 @@ Sloc.pick = { from: DOMRect, to: DOMRect, label, cls }
 - 亮点/标记的撒点时机固定在 `DBG.frame()`；不要改成挂 `clearRect`，否则 `background` 会覆盖它。
 - FSA 需要用户手势 + 权限，`file://` 下不可用；单文档模式切文件会丢撤销栈（Editor 无 undo），先做 `dirty` 提示。
 - 多 Tab 并存、撤销历史、按颜色 ID 的 pick 渲染、非 Chromium 的目录写入：本版不做。
+- `cx.watch`（宿主可选）：`watch.nodes` 为假时 `ev` 不产出 in/out/if 节点事件，`watch.rets` 为假时连 ret 也不产出。p5 的 `DBG.watch` 在有范围断点或处于 F10/F11 单步时为真；函数名断点 / 日志断点只吃 ret。主页没有 `watch` → 全量事件。ret 由 `DBG.watch.rets`（有函数名 / 日志断点或 nodes 为真）决定；失控保护已挪进 `call()`（每个驱动段 1e6 次调用，`MAXCALLS`），不再依赖事件，`RetEv.env` 改为惰性 getter。实测 fib(21) 约 2.8 s → 0.55 s。
+- 递归深度：每层 Lisp 调用嵌套多层生成器，实测约 200–400 层就会触发 JS 栈溢出（node，浏览器栈大小不同）。溢出现在报“递归过深（调用栈溢出）”并指到最深的调用；没有 TCO。
+- 帧缓冲只读：不重放、不能在过去帧里单步；没有 `tick` 的草图不录；内存约 `W×H×4×N` 字节（N ≤ 600）。
+- 预设按 `docKey` 存在 localStorage，换浏览器 / 清站点数据即丢，靠单行 JSON 导出兜底；预设只覆盖字面量部件的值，不含结构改动。
 
 ---
 

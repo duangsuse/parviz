@@ -6,7 +6,7 @@
      （hooks.enter(el)：悬停任意一行时回调，p5 页用它按需检测颜色 / 坐标）
      span  源码区间：点击 → hooks.open(span)，悬停 → hooks.hover(span, el)，离开 → hooks.leave(span, el)
      html  直接写 innerHTML（p5 的 html 函数/echo），其余一律 textContent
-   push 追加（p5 的实时输出，超过 limit 丢最旧）；set 整块替换（调试器每次重绘）；clear 清空。 */
+   push 追加（p5 的实时输出，超过 limit 丢最旧）；set 整块替换（调试器每次重绘）；clear 清空；last() 最后一行的元素。 */
 (function (G) {
 'use strict'
 const mk = (cls, kids) => { const e = document.createElement('div'); e.className = cls; for (const k of kids) if (k != null) e.append(k); return e }
@@ -39,6 +39,7 @@ function mount(host, hooks = {}) {
     // 整块替换：停在顶部（先看第一条错误）
     set(items) { host.textContent = ''; for (const it of items) host.append(row(it)); trim() },
     clear() { host.textContent = '' },
+    last: () => host.lastElementChild,   // 最后一行的元素(暂停视图把输入框挂在它下面)
   }
 }
 G.Console = { mount }

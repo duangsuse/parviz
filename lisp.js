@@ -320,8 +320,11 @@ function pool(ast, src) {
     // 热编辑：按锚点找格子，改值并同步影子源码；返回被改的格子，找不到 / 文本不是数字返回 null
     onedit(h, val) {
       const t = String(val); if (!NUMRE.test(t)) return null
-      const i = this.anchors().indexOf(h); if (i < 0) return null
-      const c = this.cells[i], ob = c.b, d = t.length - (c.b - c.a)
+      const i = this.anchors().indexOf(h); return i < 0 ? null : this.put(this.cells[i], t)
+    },
+    // 改一个格子的文本（t 已确认是数字）：同步影子源码，并把它右边所有格子顺延
+    put(c, t) {
+      const ob = c.b, d = t.length - (c.b - c.a)
       c.v = Number(t); c.b = c.a + t.length
       this.src = this.src.slice(0, c.a) + t + this.src.slice(ob)
       for (const k of this.cells) if (k !== c && k.a >= ob) { k.a += d; k.b += d }
@@ -334,11 +337,11 @@ function pool(ast, src) {
       this.cells.forEach((c, i) => { const n = next.cells[i]; if (n.v !== c.v) r.push({ cell: c, text: next.src.slice(n.a, n.b) }) })
       return r
     },
-    // 一次编辑（仅数字字面量变化）后：逐格调 onedit（从右往左，左边的锚点不受影响），再把影子源码与跨度对齐到新文本
+    // 一次编辑（仅数字字面量变化）后：逐格 put（从右往左，不用逐格重算锚点），再把影子源码与跨度对齐到新文本
     apply(next) {
       const ch = this.diff(next); if (!ch) return null
-      const as = this.anchors(), done = []
-      for (const e of ch.sort((p, q) => q.cell.a - p.cell.a)) { const c = this.onedit(as[this.cells.indexOf(e.cell)], e.text); if (c) done.push(c) }
+      const done = []
+      for (const e of ch.sort((p, q) => q.cell.a - p.cell.a)) if (NUMRE.test(e.text)) done.push(this.put(e.cell, e.text))
       this.src = next.src; this.cells.forEach((c, i) => { c.a = next.cells[i].a; c.b = next.cells[i].b })
       respan(code, next.code, new Set)   // 结构相同的两棵树：其余节点的 a/b 也跟着新文本走（控制台 / 暂停 / 取源的跨度不会错位）
       return done
@@ -395,12 +398,13 @@ Object.setPrototypeOf(B, null)   // 名字如 constructor 不会命中 Object �
 function* ev(x, env, stmt = false) {
   if (!isT(x)) return x instanceof Lit ? x.v : x   // 数字等裸字面量；常量池的格子解指针（见 pool）
   const t = x[0]; let v
-  yield { x, a: x.a, b: x.b, ph: 'in' }
+  const w = CX.watch, nodes = !w || w.nodes                 // 宿主给了 watch（p5 的 DBG）且没人要节点事件时，in/out/if 都不产出（只剩 ret）
+  if (nodes) yield { x, a: x.a, b: x.b, ph: 'in' }
   if (t === '$') v = lookup(x, env)          // 最常见的三种节点（名字、全局键、字符串字面）不经 Walk 表与生成器委托
   else if (t === '$$') v = glookup(x, env)
   else if (t === '') v = x[1]
   else { const f = Walk[t]; if (!f) throw new LispErr(tr`未知标签 ${t}`, x); v = yield* f(x, env, stmt) }
-  yield { x, a: x.a, b: x.b, ph: 'out', v }
+  if (nodes) yield { x, a: x.a, b: x.b, ph: 'out', v }
   return v
 }
 const lookup = (x, env) => {
@@ -435,7 +439,7 @@ const Walk = {
   },
   *'?'(x, env) {
     const c = yield* ev(x[1], env), t = truthy(c)
-    yield { x, a: x.a, b: x.b, ph: 'if', c, t }
+    if (!CX.watch || CX.watch.nodes) yield { x, a: x.a, b: x.b, ph: 'if', c, t }
     return yield* ev(t ? x[2] : x[3], env)
   },
   *'=>'(x, env) { return { t: 'fn', params: x[1].slice(1), body: x.slice(2), env, a: x.a, b: x.b, name: '' } },
@@ -490,9 +494,19 @@ function evalIn(ast, env, extra) {
   it.cx = newCx(L.host, [])
   return drive(it)
 }
+// ret 事件：env（暂停时即时求值用的帧环境）是原型上的 getter，不是自有属性，事件被整体展示 / 序列化时不会带上；用到才求，常规调用不付 envOf 的栈扫描
+class RetEv {
+  #fr; #cx
+  constructor(fr, cx, x, f, args, v) {
+    this.x = x; this.a = x ? x.a : f.t == 'fn' ? f.a : undefined; this.b = x ? x.b : f.t == 'fn' ? f.b : undefined
+    this.ph = 'ret'; this.f = f; this.args = args; this.v = v; this.#fr = fr; this.#cx = cx
+  }
+  get env() { return this.#fr.env || envOf(this.#cx) }
+}
 function* call(f, args, x) {
   const cx = CX || (CX = newCx(L.host, L.host?.log))
   const fr = { f, x, a: x?.a, b: x?.b }
+  if (++cx.n > MAXCALLS) { cx.n = 0; throw new LispErr(tr`超过 ${MAXCALLS} 次调用，已中止`, x) }   // 失控保护不依赖事件：ret 被 watch 门掉后仍然有效（每次驱动器恢复时清零）
   cx.stack.push(fr)
   let v
   try {
@@ -517,12 +531,13 @@ function* call(f, args, x) {
     }
     else throw new LispErr(tr`${show(f, 1)} 不可调用`, x)
     if (cx.hooks && cx.hooks.ext) cx.hooks.ext({ cx, f, x, a: fr.a, b: fr.b, args, v })   // pick 模式：默认 null，运行时只剩一次属性读
-    const ret = { x, a: x ? x.a : (f.t == 'fn' ? f.a : undefined), b: x ? x.b : (f.t == 'fn' ? f.b : undefined), ph: 'ret', f, args, v }
-    Object.defineProperty(ret, 'env', { value: fr.env || envOf(cx) })   // 暂停时即时求值用（不可枚举：事件常被整体展示 / 序列化）
-    const s = yield ret                                                  // 暂停的 Promise 可以兑现成 { v }：替换这次调用的返回值
-    if (s && typeof s == 'object' && 'v' in s) v = s.v
+    if (!cx.watch || cx.watch.rets) {                                     // 宿主声明没人要 ret 事件时整个 yield 省掉
+      const s = yield new RetEv(fr, cx, x, f, args, v)                    // 暂停的 Promise 可以兑现成 { v }：替换这次调用的返回值
+      if (s && typeof s == 'object' && 'v' in s) v = s.v
+    }
     return v
-  } finally { cx.stack.pop() }
+  } catch (e) { if (e instanceof RangeError && !e.x) e.x = x; throw e }   // JS 栈溢出：指到最深的那次调用（外层 call 接力补上）
+  finally { cx.stack.pop() }
 }
 // 函数体/程序：单语句直接取值；多语句必须用 OK 返回（last：像 Calc 那样取最后一句的值）
 function* body(items, env, at, last) {
@@ -539,7 +554,8 @@ function* body(items, env, at, last) {
 /* ---- 驱动 ----
    一次执行 = 一个 cx：{ run, log, stack, hooks }。CX 是“当前同步段”的 cx，只在 it.next() 周围设置/恢复，
    所以嵌套入口（JS 回调再进 Lisp）各用各的栈，外层挂起时的栈不受影响；异步挂起后 JS 栈没了，栈还在。 */
-const newCx = (h, log) => ({ run: h?.run ?? null, log: log ?? h?.log ?? [], stack: [], hooks: h?.hooks ?? null })
+const MAXCALLS = 1e6
+const newCx = (h, log) => ({ run: h?.run ?? null, log: log ?? h?.log ?? [], stack: [], hooks: h?.hooks ?? null, watch: h?.watch ?? null, n: 0 })
 let CX = null
 const atOf = () => CX && CX.stack.length ? CX.stack[CX.stack.length - 1] : null
 const sync = (it, f) => { const p = CX; CX = it.cx; try { return f() } finally { CX = p } }
@@ -582,6 +598,7 @@ const run = prog => drive(steps(prog))
 const node = (ast, prog) => drive(steps(ast, prog))
 const fail = e => {
   if (e instanceof Ret) return { value: e.v }
+  if (e instanceof RangeError && /call stack/i.test(e.message)) return { err: tr`递归过深（调用栈溢出）`, a: e.x?.a, b: e.x?.b }
   if (e instanceof LispErr || e instanceof RangeError || e instanceof TypeError) return { err: e.message, a: e.x?.a, b: e.x?.b }
   throw e
 }
@@ -597,6 +614,7 @@ const exec = (it, h = L.host, max = 3e6) => {
   const go = send => {
     for (let n = 0; ; n++) {
       if (h?.alive && !h.alive()) { close(); return { cancelled: true } }
+      it.cx.n = 0
       const r = step(it, send); send = undefined
       if (r.done) return r.value
       const e = r.value, w = e.ph == 'await' ? e.p.then(v => ({ v }), err => ({ err })) : h?.pause?.(e)
